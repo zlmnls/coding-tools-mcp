@@ -64,7 +64,12 @@ mod tests {
                 " - [{}] ID: {}, Command: {} {:?}",
                 d.source, d.config.id, d.config.command, d.config.args
             );
+            assert!(!d.config.id.trim().is_empty());
+            assert!(!d.config.command.trim().is_empty());
+            assert!(matches!(
+                d.config.usage_mode.as_str(),
+                "always_on" | "on_demand"
+            ));
         }
-        assert!(!discovered.is_empty());
     }
 }

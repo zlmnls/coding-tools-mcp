@@ -50,27 +50,21 @@ pub fn discover_local_mcps() -> Vec<DiscoveredMcpServer> {
         .unwrap_or_default();
 
     let mut results = Vec::new();
-    let home = match dirs::home_dir() {
-        Some(h) => h,
+    let config_dir = match dirs::config_dir() {
+        Some(path) => path,
         None => return results,
     };
 
     let search_targets = vec![
         (
             "Trae SOLO CN",
-            home.join("Library/Application Support/TRAE SOLO CN/User/mcp.json"),
+            config_dir.join("TRAE SOLO CN/User/mcp.json"),
         ),
-        (
-            "Trae CN",
-            home.join("Library/Application Support/Trae CN/User/mcp.json"),
-        ),
-        (
-            "Trae",
-            home.join("Library/Application Support/Trae/User/mcp.json"),
-        ),
+        ("Trae CN", config_dir.join("Trae CN/User/mcp.json")),
+        ("Trae", config_dir.join("Trae/User/mcp.json")),
         (
             "Claude Desktop",
-            home.join("Library/Application Support/Claude/claude_desktop_config.json"),
+            config_dir.join("Claude/claude_desktop_config.json"),
         ),
     ];
 
