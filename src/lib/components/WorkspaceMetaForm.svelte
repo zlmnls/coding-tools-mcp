@@ -84,15 +84,11 @@
     void save();
   }}
 >
-  <label class="tx-field min-w-0 flex-1">
-    <span class="tx-label">工作区名称</span>
-    <input type="text" class="tx-input" bind:value={draftName} />
-  </label>
   <div class="tx-field min-w-0 flex-1">
-    <span class="tx-label">路径</span>
+    <span class="tx-label">本地目录</span>
     <div class="flex min-w-0 items-center gap-2">
       <p
-        class="tx-mono min-w-0 flex-1 truncate rounded-[10px] border border-transparent px-2.5 py-2 text-[var(--color-text-secondary)]"
+        class="tx-mono min-w-0 flex-1 truncate rounded-[10px] border border-transparent px-2.5 py-2 text-[var(--color-text-secondary)] bg-black/5 dark:bg-white/5"
         title={path}
       >
         {path}
@@ -113,11 +109,8 @@
         onclick={() => void updateDirectory()}
       >
         <FolderInput size={14} class="inline-block" />
-        <span class="ml-1">{updatingPath ? "选择中…" : "更新目录"}</span>
+        <span class="ml-1">{updatingPath ? "选择中…" : "切换目录"}</span>
       </button>
     </div>
   </div>
-  <button type="submit" class="tx-btn-primary shrink-0" disabled={saving || !dirty}>
-    {saving ? "保存中…" : "保存名称"}
-  </button>
 </form>

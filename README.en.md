@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" width="96" alt="Coding Tools MCP icon">
+  <img src="src-tauri/icons/128x128.png" width="96" alt="MCP-Gateway icon">
 </p>
 
-<h1 align="center">Coding Tools MCP</h1>
+<h1 align="center">MCP-Gateway</h1>
 
 <p align="center">
   Turn a local project into a persistent AI development workspace that carries context across conversations.
@@ -19,9 +19,9 @@
   <a href="README.md">中文</a> · <a href="README.en.md">English</a> · <a href="https://github.com/mybolide/coding-tools-mcp/releases/latest">Download latest</a>
 </p>
 
-Coding Tools MCP is a Rust + Tauri 2 desktop application. Select a project directory and start the service; an AI agent can then read files, edit code, run commands and tests, inspect Git, and preserve development progress inside the project through MCP. It behaves like an AI opening an IDE workspace that remembers where the last conversation stopped.
+MCP-Gateway is a Rust + Tauri 2 desktop application. Select a project directory and start the service; an AI agent can then read files, edit code, run commands and tests, inspect Git, and preserve development progress inside the project through MCP. It behaves like an AI opening an IDE workspace that remembers where the last conversation stopped.
 
-![Coding Tools MCP workspace overview](docs/images/workspace-overview.png)
+![MCP-Gateway workspace overview](docs/images/workspace-overview.png)
 
 *One desktop app manages workspaces, MCP services, connection details, and the session-recovery prompt.*
 
@@ -50,8 +50,8 @@ Open [Releases](https://github.com/mybolide/coding-tools-mcp/releases/latest) an
 
 | Platform | Package |
 | --- | --- |
-| Windows 10/11 x64 | `Coding.Tools.MCP_*_x64-setup.exe` |
-| macOS Apple Silicon | `Coding Tools MCP_*_aarch64.dmg` |
+| Windows 10/11 x64 | `MCP-Gateway_*_x64-setup.exe` |
+| macOS Apple Silicon | `MCP-Gateway_*_aarch64.dmg` |
 
 The macOS build is currently unsigned. If macOS blocks the first launch, allow it from System Settings → Privacy & Security.
 
@@ -146,7 +146,7 @@ Open **Plugins** from the ChatGPT sidebar, click the `+` button, select the MCP 
 
 | ChatGPT field | Value |
 | --- | --- |
-| Name | A recognizable name such as `Coding Tools MCP` |
+| Name | A recognizable name such as `MCP-Gateway` |
 | Description | A short description of the connected project or purpose |
 | Connection | The public MCP URL from the desktop **GPT configuration** card; it should end in `/mcp` |
 | Authentication | The same mode configured in the desktop app; the screenshot uses OAuth |
@@ -162,7 +162,7 @@ For OAuth, open the advanced OAuth settings, select static/manual OAuth credenti
 Start a new conversation with the plugin enabled and ask:
 
 ```text
-Use Coding Tools MCP to call server_info, get_default_cwd, and git_status.
+Use MCP-Gateway to call server_info, get_default_cwd, and git_status.
 Tell me which workspace is connected, its default directory, and its Git status.
 ```
 
@@ -199,7 +199,7 @@ MCP and Actions can run together for the same workspace, with separate ports and
 
 ## Let the project remember every conversation
 
-Chat transcripts are useful for rereading a discussion, but they are a poor long-term development handoff. Coding Tools MCP stores progress in `docs/history-session/` under the current project, so context follows the repository instead of staying trapped in one chat window.
+Chat transcripts are useful for rereading a discussion, but they are a poor long-term development handoff. MCP-Gateway stores progress in `docs/history-session/` under the current project, so context follows the repository instead of staying trapped in one chat window.
 
 ![ChatGPT new-conversation startup prompt](docs/images/history-session-prompt.png)
 

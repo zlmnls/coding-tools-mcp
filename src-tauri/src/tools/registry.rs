@@ -313,6 +313,62 @@ pub const P0_TOOLS: &[(&str, &str, &str, bool, bool, bool)] = &[
         false,
         false,
     ),
+    (
+        "skill_list",
+        "List Skills",
+        "List registered Skills using lightweight metadata only.",
+        true,
+        false,
+        false,
+    ),
+    (
+        "skill_match",
+        "Match Skills",
+        "Find the most relevant registered Skills for the complete user task.",
+        true,
+        false,
+        false,
+    ),
+    (
+        "skill_load",
+        "Load Skill",
+        "Load a selected Skill or contained resource on demand after source checks.",
+        true,
+        false,
+        false,
+    ),
+    (
+        "skill_exec",
+        "Execute Skill Command",
+        "Execute a command for a registered local Skill using the host environment.",
+        false,
+        true,
+        false,
+    ),
+    (
+        "mcp_list",
+        "List External MCPs",
+        "Discover registered external MCP capabilities. Use this when a task may depend on connected systems such as long-term memory, enterprise documents, internal knowledge, databases, or business systems, and before concluding that such an external capability is unavailable. Default output is concise; request full detail only when tool schemas or server instructions are needed.",
+        true,
+        false,
+        false,
+    ),
+    (
+        "mcp_match",
+        "Match External MCP Tools",
+        "Find the most relevant tools across registered external MCP servers for the complete user task. Use this when the task may require an external or connected capability but the exact MCP tool is not already obvious; then execute the selected tool directly if exposed or through mcp_call.",
+        true,
+        false,
+        false,
+    ),
+    (
+        "mcp_call",
+        "Call External MCP Tool",
+        "Execute a tool provided by a registered external MCP server. Use after mcp_match or mcp_list identifies the authoritative external capability. If a tool cannot be resolved and mounted capabilities may have changed, refresh mcp_list before concluding it is unavailable.",
+        false,
+        false,
+        true,
+    ),
 ];
 
 /// old Python 版本默认提供的核心工具集。默认 MCP 只暴露这一组，保持 Agent 的工具面稳定。
@@ -343,6 +399,13 @@ pub const CORE_TOOLS: &[&str] = &[
     "git_blame",
     "request_permissions",
     "view_image",
+    "skill_list",
+    "skill_match",
+    "skill_load",
+    "skill_exec",
+    "mcp_list",
+    "mcp_match",
+    "mcp_call",
 ];
 
 pub const CORE_READ_ONLY_TOOLS: &[&str] = &[
@@ -363,6 +426,11 @@ pub const CORE_READ_ONLY_TOOLS: &[&str] = &[
     "git_blame",
     "request_permissions",
     "view_image",
+    "skill_list",
+    "skill_match",
+    "skill_load",
+    "mcp_list",
+    "mcp_match",
 ];
 
 pub const ALLOWED_TOOLS: &[&str] = &[
@@ -406,6 +474,13 @@ pub const ALLOWED_TOOLS: &[&str] = &[
     "change_summary",
     "request_permissions",
     "view_image",
+    "skill_list",
+    "skill_match",
+    "skill_load",
+    "skill_exec",
+    "mcp_list",
+    "mcp_match",
+    "mcp_call",
 ];
 
 pub const MUTATING_TOOLS: &[&str] = &[
@@ -452,6 +527,8 @@ pub const READ_ONLY_TOOLS: &[&str] = &[
     "task_context",
     "list_task_events",
     "change_summary",
+    "mcp_list",
+    "mcp_match",
 ];
 
 pub fn is_allowed_tool(name: &str) -> bool {
@@ -895,6 +972,45 @@ pub fn input_schema(name: &str) -> Value {
             },
             "additionalProperties": false
         }),
+        "skill_list" => json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        "skill_match" => {
+            json!({"type": "object", "required": ["task"], "properties": {"task": {"type": "string", "minLength": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 3}}, "additionalProperties": false})
+        }
+        "skill_load" => {
+            json!({"type": "object", "required": ["skill_id"], "properties": {"skill_id": {"type": "string", "minLength": 1}, "resource": {"type": "string"}}, "additionalProperties": false})
+        }
+        "skill_exec" => {
+            json!({"type": "object", "required": ["skill_id", "command"], "properties": {"skill_id": {"type": "string", "minLength": 1}, "command": {"type": "string", "minLength": 1, "maxLength": 4000}}, "additionalProperties": false})
+        }
+        "mcp_list" => json!({
+            "type": "object",
+            "properties": {
+                "server_id": { "type": "string", "description": "可选：指定外部 MCP 服务 ID，例如 'mem0'" },
+                "refresh": { "type": "boolean", "default": false, "description": "是否强制重新探测并拉取最新工具定义" },
+                "detail": { "type": "string", "enum": ["summary", "full"], "default": "summary", "description": "summary 仅返回简洁能力目录；full 额外返回完整 instructions 与 input_schema" }
+            },
+            "additionalProperties": false
+        }),
+        "mcp_match" => json!({
+            "type": "object",
+            "required": ["task"],
+            "properties": {
+                "task": { "type": "string", "minLength": 1, "description": "完整用户任务，用于匹配已注册外部 MCP 能力" },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 10, "default": 5 },
+                "refresh": { "type": "boolean", "default": false, "description": "匹配前是否强制刷新外部 MCP 工具缓存" }
+            },
+            "additionalProperties": false
+        }),
+        "mcp_call" => json!({
+            "type": "object",
+            "required": ["tool"],
+            "properties": {
+                "server_id": { "type": "string", "description": "可选：外部 MCP 服务 ID，例如 'mem0'。若省略则自动从工具名解析" },
+                "tool": { "type": "string", "minLength": 1, "description": "外部 MCP 提供的工具名，例如 'search_memories' 或 'save_memory'" },
+                "arguments": { "type": "object", "default": {}, "description": "传给外部 MCP 工具的调用参数对象", "additionalProperties": true }
+            },
+            "additionalProperties": false
+        }),
         "view_image" => json!({
             "type": "object",
             "properties": {
@@ -923,7 +1039,7 @@ mod tests {
     use super::{input_schema, list_tools_for_profile};
 
     #[test]
-    fn core_catalog_exposes_26_chatgpt_compatible_tools() {
+    fn core_catalog_exposes_33_chatgpt_compatible_tools() {
         let tools = list_tools_for_profile("core");
         let names: Vec<_> = tools
             .iter()
@@ -931,11 +1047,16 @@ mod tests {
             .collect();
         let unique: HashSet<_> = names.iter().copied().collect();
 
-        assert_eq!(tools.len(), 26);
+        assert_eq!(tools.len(), 33);
         assert_eq!(unique.len(), tools.len());
         assert!(names.contains(&"history_session_bootstrap"));
         assert!(names.contains(&"history_session_checkpoint"));
         assert!(names.contains(&"history_session_validate"));
+        assert!(names.contains(&"skill_list"));
+        assert!(names.contains(&"skill_match"));
+        assert!(names.contains(&"mcp_list"));
+        assert!(names.contains(&"mcp_match"));
+        assert!(names.contains(&"mcp_call"));
         assert!(names.contains(&"history_session_search"));
         assert!(names.contains(&"history_session_read"));
         assert!(names.contains(&"grep_text"));

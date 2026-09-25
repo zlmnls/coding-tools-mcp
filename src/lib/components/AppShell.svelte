@@ -1,10 +1,6 @@
 <script lang="ts">
   import ThemeToggle from "$lib/components/ThemeToggle.svelte";
   import { APP_VERSION } from "$lib/app-version";
-  import { REPO_URL } from "$lib/app-links";
-  import { openUrl } from "$lib/api/app-info";
-  import { message } from "@tauri-apps/plugin-dialog";
-  import { Github } from "@lucide/svelte";
   import type { Snippet } from "svelte";
 
   interface Props {
@@ -15,63 +11,36 @@
   }
 
   let { children, sidebar, onAddWorkspace, settingsNav }: Props = $props();
-
-  async function openRepo() {
-    try {
-      await openUrl(REPO_URL);
-    } catch (e) {
-      await message(String(e), { title: "无法打开仓库", kind: "error" });
-    }
-  }
 </script>
 
 <div class="app-layout">
   <aside class="tx-sidebar">
     <div class="tx-sidebar-header">
       <div class="flex items-start justify-between gap-2">
-        <div>
-          <p class="tx-brand-kicker">Coding Tools</p>
-          <h1 class="tx-brand-title">桌面控制台</h1>
+        <div class="flex items-center gap-2.5">
+          <img src="/favicon.png" alt="Logo" class="h-8 w-8 rounded-lg shadow-sm" />
+          <div>
+            <p class="tx-brand-kicker">Gateway</p>
+            <h1 class="tx-brand-title">Mcp Tools</h1>
+          </div>
         </div>
         <ThemeToggle />
       </div>
-      {#if onAddWorkspace}
-        <button type="button" class="tx-btn-primary tx-btn-sidebar" onclick={onAddWorkspace}>
-          添加工作区
-        </button>
-      {/if}
     </div>
 
     <div class="tx-sidebar-body">
-      {#if onAddWorkspace}
-        <p class="tx-sidebar-section-label">工作区</p>
-      {/if}
       {@render sidebar()}
     </div>
 
-    {#if settingsNav}
-      <div class="tx-sidebar-footer">
-        <p class="tx-sidebar-section-label">设置</p>
+    <div class="tx-sidebar-footer">
+      {#if settingsNav}
         {@render settingsNav()}
-        <div class="tx-app-meta">
-          <p class="tx-app-version">v{APP_VERSION}</p>
-          <button type="button" class="tx-repo-link" onclick={() => void openRepo()}>
-            <Github size={12} strokeWidth={2} />
-            <span>仓库</span>
-          </button>
-        </div>
+      {/if}
+      <div class="tx-app-meta">
+        <p class="tx-app-version">v{APP_VERSION}</p>
+        <span class="text-[10px] text-emerald-400/80 font-mono tracking-wide">● Ready</span>
       </div>
-    {:else}
-      <div class="tx-sidebar-footer">
-        <div class="tx-app-meta">
-          <p class="tx-app-version">v{APP_VERSION}</p>
-          <button type="button" class="tx-repo-link" onclick={() => void openRepo()}>
-            <Github size={12} strokeWidth={2} />
-            <span>仓库</span>
-          </button>
-        </div>
-      </div>
-    {/if}
+    </div>
   </aside>
 
   <main class="tx-main">
@@ -80,5 +49,5 @@
 </div>
 
 <svelte:head>
-  <title>Coding Tools MCP</title>
+  <title>MCP-Gateway</title>
 </svelte:head>

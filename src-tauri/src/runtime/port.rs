@@ -14,7 +14,9 @@ pub fn is_own_process(pid: u32) -> bool {
 #[cfg(any(target_os = "macos", test))]
 const DESKTOP_EXECUTABLE_NAME: &str = "coding-tools-mcp-desktop";
 #[cfg(any(target_os = "macos", test))]
-const DESKTOP_BUNDLE_ID: &str = "com.codingtools.mcp.desktop";
+const DESKTOP_BUNDLE_IDS: &[&str] = &["com.mcpgateway.desktop", "com.codingtools.mcp.desktop"];
+#[cfg(any(target_os = "macos", test))]
+const DESKTOP_BUNDLE_NAMES: &[&str] = &["MCP-Gateway.app", "Coding Tools MCP.app"];
 
 /// Reclaim a port only when it belongs to an older macOS instance of this app.
 ///
@@ -67,7 +69,10 @@ fn is_managed_macos_desktop_executable(image: &Path) -> bool {
     else {
         return false;
     };
-    if bundle.file_name().and_then(|name| name.to_str()) != Some("Coding Tools MCP.app")
+    let Some(bundle_name) = bundle.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if !DESKTOP_BUNDLE_NAMES.contains(&bundle_name)
         || !image.starts_with(bundle.join("Contents").join("MacOS"))
     {
         return false;
@@ -76,13 +81,15 @@ fn is_managed_macos_desktop_executable(image: &Path) -> bool {
     let Ok(info_plist) = std::fs::read_to_string(bundle.join("Contents").join("Info.plist")) else {
         return false;
     };
-    let pattern = format!(
-        r"(?s)<key>\s*CFBundleIdentifier\s*</key>\s*<string>\s*{}\s*</string>",
-        regex::escape(DESKTOP_BUNDLE_ID)
-    );
-    regex::Regex::new(&pattern)
-        .map(|regex| regex.is_match(&info_plist))
-        .unwrap_or(false)
+    DESKTOP_BUNDLE_IDS.iter().any(|bundle_id| {
+        let pattern = format!(
+            r"(?s)<key>\s*CFBundleIdentifier\s*</key>\s*<string>\s*{}\s*</string>",
+            regex::escape(bundle_id)
+        );
+        regex::Regex::new(&pattern)
+            .map(|regex| regex.is_match(&info_plist))
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -227,8 +234,12 @@ mod tests {
 
     use super::*;
 
-    fn write_bundle(root: &std::path::Path, identifier: &str) -> std::path::PathBuf {
-        let bundle = root.join("Coding Tools MCP.app");
+    fn write_bundle_named(
+        root: &std::path::Path,
+        bundle_name: &str,
+        identifier: &str,
+    ) -> std::path::PathBuf {
+        let bundle = root.join(bundle_name);
         let contents = bundle.join("Contents");
         let executable = contents.join("MacOS/coding-tools-mcp-desktop");
         fs::create_dir_all(executable.parent().expect("MacOS dir")).expect("create bundle");
@@ -241,6 +252,19 @@ mod tests {
         .expect("write Info.plist");
         fs::write(&executable, "test executable").expect("write executable");
         executable
+    }
+
+    fn write_bundle(root: &std::path::Path, identifier: &str) -> std::path::PathBuf {
+        write_bundle_named(root, "Coding Tools MCP.app", identifier)
+    }
+
+    #[test]
+    fn recognizes_the_current_mcp_gateway_macos_bundle() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let executable =
+            write_bundle_named(temp.path(), "MCP-Gateway.app", "com.mcpgateway.desktop");
+
+        assert!(is_managed_macos_desktop_executable(&executable));
     }
 
     #[test]

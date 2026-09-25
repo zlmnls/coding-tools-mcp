@@ -32,22 +32,27 @@ fn profile_by_id(state: &AppState, id: &str) -> AppResult<WorkspaceProfile> {
 fn log_file_names(profile: &WorkspaceProfile, service: &str) -> AppResult<Vec<&'static str>> {
     match service {
         "mcp" => {
-            let mut names = vec!["stderr.log", "stdout.log"];
+            let mut names = Vec::new();
+            // 隧道网络日志置顶第一位
             if profile.tunnel.tunnel_type == "cloudflare" {
-                names.insert(0, "cloudflared.log");
+                names.push("cloudflared.log");
             }
             if profile.tunnel.tunnel_type == "frp" {
-                names.insert(0, "frpc-mcp.log");
+                names.push("frpc-mcp.log");
             }
+            // 鉴权与 401 诊断紧随其后
+            names.push("mcp-auth.log");
+            // 工具请求与执行结果在后
+            names.push("mcp-requests.log");
             Ok(names)
         }
         "actions" => {
-            let mut names = vec!["actions-stderr.log", "actions-stdout.log"];
+            let mut names = Vec::new();
             if profile.actions.tunnel_type == "cloudflare" {
-                names.insert(0, "actions-cloudflared.log");
+                names.push("actions-cloudflared.log");
             }
             if profile.actions.tunnel_type == "frp" {
-                names.insert(0, "frpc-actions.log");
+                names.push("frpc-actions.log");
             }
             Ok(names)
         }

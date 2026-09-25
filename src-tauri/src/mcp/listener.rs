@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 use tower_http::cors::CorsLayer;
 
@@ -17,9 +18,9 @@ use crate::auth::{
 };
 use crate::mcp::server::{handle_request, new_state, SharedState};
 use crate::secret::SecretStore;
+use crate::tools::policy::PolicySettings;
 use crate::tools::Workspace;
 use crate::tunnel::append_profile_log;
-use crate::tools::policy::PolicySettings;
 use crate::workspace::{AuthConfig, RuntimeConfig};
 
 pub type ShutdownSender = oneshot::Sender<()>;
@@ -73,11 +74,7 @@ pub fn spawn_listener(
     let oauth = if auth.oauth_enabled() {
         let password = oauth_password.unwrap_or_default();
         let token_secret = oauth_token_secret.unwrap_or_default();
-        let oauth_base = external_base_url(
-            &HeaderMap::new(),
-            port,
-            &configured_public_url,
-        );
+        let oauth_base = external_base_url(&HeaderMap::new(), port, &configured_public_url);
         Some(Arc::new(OAuthRuntime::new(
             oauth_base,
             auth.oauth_client_id.clone(),
@@ -136,7 +133,10 @@ async fn serve(
             "/.well-known/oauth-protected-resource",
             get(oauth_protected_resource_metadata),
         )
-        .route("/oauth/authorize", get(oauth_authorize_get).post(oauth_authorize_post))
+        .route(
+            "/oauth/authorize",
+            get(oauth_authorize_get).post(oauth_authorize_post),
+        )
         .route("/oauth/token", post(oauth_token_post))
         .with_state(state)
         .layer(CorsLayer::permissive());
@@ -171,13 +171,21 @@ async fn mcp_discovery() -> Response {
 
 fn mcp_discovery_payload() -> Value {
     json!({
-        "name": "coding-tools-mcp",
+        "name": "MCP-Gateway",
         "version": env!("CARGO_PKG_VERSION"),
         "protocolVersion": "2025-06-18"
     })
 }
 
+/// 所有 OAuth 标识端点（issuer/aud/authorization/token 服务器元数据）
+/// 必须使用与 access token 签发一致的单一 canonical URL。
+/// 若 OAuth 运行时已持有 canonical URL 则优先使用，避免请求头漂移。
 fn resolve_oauth_base(state: &ListenerState, headers: &HeaderMap) -> String {
+    if let Some(oauth) = state.oauth.as_ref() {
+        if !oauth.canonical_server_url.is_empty() {
+            return oauth.canonical_server_url.clone();
+        }
+    }
     external_base_url(headers, state.bind_port, &state.configured_public_url)
 }
 
@@ -187,8 +195,10 @@ async fn mcp_post(
     Json(body): Json<Value>,
 ) -> Response {
     if let Some(response) = require_mcp_auth(&state, &headers) {
+        log_rpc_auth(&state, &headers, &body, false, response.status().as_u16());
         return response;
     }
+    log_rpc_auth(&state, &headers, &body, true, 200);
     let method = body
         .get("method")
         .and_then(Value::as_str)
@@ -218,7 +228,10 @@ async fn mcp_post(
             append_profile_log(
                 &profile_id,
                 "mcp-requests.log",
-                &format!("[rpc] completed id={} method={} tool={}", request_id, method, tool_name),
+                &format!(
+                    "[rpc] completed id={} method={} tool={}",
+                    request_id, method, tool_name
+                ),
             );
             if tool_name == "exec_command" || tool_name == "exec_health_check" {
                 let structured = response
@@ -294,6 +307,97 @@ fn require_mcp_auth(state: &ListenerState, headers: &HeaderMap) -> Option<Respon
     None
 }
 
+/// 记录每次 tools/call 的鉴权上下文（成功与失败都记），用于对比连续请求的 token 状态。
+/// 只记录 token 的 SHA256 前缀/指纹，绝不记录 token 明文或密钥。
+fn log_rpc_auth(
+    state: &ListenerState,
+    headers: &HeaderMap,
+    body: &Value,
+    authorized: bool,
+    status: u16,
+) {
+    let method = body
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let tool_name = body
+        .get("params")
+        .and_then(|params| params.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let session_id = jsonrpc_session_id(body);
+    let (bearer_present, token_fp) = bearer_fingerprint(headers);
+    let auth_mode = if state.auth.oauth_enabled() {
+        "oauth"
+    } else if state.auth.bearer_enabled() {
+        "bearer"
+    } else {
+        "none"
+    };
+    let host = header_str(headers, "host");
+    let forwarded_host = header_str(headers, "x-forwarded-host");
+    let canonical_url = resolve_oauth_base(state, headers);
+    append_profile_log(
+        &state.workspace_id,
+        "mcp-auth.log",
+        &format!(
+            "[auth] pid={} ws={} method={} tool={} session={} authorized={} status={} auth_mode={} bearer={} token_fp={} host={} xfh={} canonical={}",
+            std::process::id(),
+            state.workspace_id,
+            method,
+            tool_name,
+            session_id,
+            authorized,
+            status,
+            auth_mode,
+            bearer_present,
+            token_fp,
+            host,
+            forwarded_host,
+            canonical_url
+        ),
+    );
+}
+
+fn jsonrpc_session_id(body: &Value) -> String {
+    body.get("params")
+        .and_then(|params| {
+            params
+                .get("_meta")
+                .and_then(|meta| meta.get("sessionId").and_then(Value::as_str))
+                .or_else(|| params.get("sessionId").and_then(Value::as_str))
+        })
+        .unwrap_or("")
+        .to_string()
+}
+
+fn header_str(headers: &HeaderMap, name: &str) -> String {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// 返回 (是否携带 Bearer, token 的 SHA256 前 12 位指纹)。不泄露 token 明文。
+fn bearer_fingerprint(headers: &HeaderMap) -> (String, String) {
+    let value = header_str(headers, "authorization");
+    let Some(token) = value.strip_prefix("Bearer ").map(str::trim) else {
+        return ("no".to_string(), "-".to_string());
+    };
+    if token.is_empty() {
+        return ("no".to_string(), "-".to_string());
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let digest = hasher.finalize();
+    let hex = format!("{digest:x}");
+    let fp = hex.chars().take(12).collect::<String>();
+    ("yes".to_string(), fp)
+}
+
 async fn oauth_authorization_server_metadata(
     State(state): State<ListenerState>,
     headers: HeaderMap,
@@ -316,7 +420,10 @@ async fn oauth_protected_resource_metadata(
     if !state.auth.oauth_enabled() {
         return oauth_not_configured();
     }
-    Json(protected_resource_metadata(&resolve_oauth_base(&state, &headers))).into_response()
+    Json(protected_resource_metadata(&resolve_oauth_base(
+        &state, &headers,
+    )))
+    .into_response()
 }
 
 async fn oauth_authorize_get(
@@ -326,11 +433,7 @@ async fn oauth_authorize_get(
     let Some(oauth) = state.oauth.as_ref() else {
         return oauth_not_configured();
     };
-    authorize_get(
-        oauth,
-        params,
-        Some(state.workspace_path.as_str()),
-    )
+    authorize_get(oauth, params, Some(state.workspace_path.as_str()))
 }
 
 async fn oauth_authorize_post(
@@ -356,12 +459,7 @@ async fn oauth_token_post(
         )
             .into_response();
     };
-    token_exchange(
-        oauth,
-        &headers,
-        form,
-        &resolve_oauth_base(&state, &headers),
-    )
+    token_exchange(oauth, &headers, form, &resolve_oauth_base(&state, &headers))
 }
 
 fn oauth_not_configured() -> Response {

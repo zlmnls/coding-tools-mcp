@@ -52,7 +52,9 @@ jobs:
           if-no-files-found: error
 
   build-universal-macos:
-    runs-on: macos-14
+    runs-on: macos-latest
+    env:
+      APPLE_SIGNING_IDENTITY: "-"
     steps:
       - uses: actions/checkout@v4
 
@@ -111,7 +113,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
-          name: Coding Tools MCP ${{ inputs.release_tag || github.ref_name }}
+          name: MCP-Gateway ${{ inputs.release_tag || github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |

@@ -1,9 +1,11 @@
 mod app_info;
+pub mod external_mcp;
 mod frp_profiles;
 mod health;
 mod logs;
 pub(crate) mod runtime;
 mod secrets;
+mod skills;
 mod software;
 mod tunnel;
 pub(crate) mod ui_memory;
@@ -11,8 +13,10 @@ pub(crate) mod window_chrome;
 mod workspace;
 
 pub use app_info::{check_app_update, open_url};
-pub use ui_memory::{get_webview_memory_sample, recreate_ui_webview};
-pub use window_chrome::{hide_to_tray, quit_app, show_main_window};
+pub use external_mcp::{
+    delete_external_mcp, discover_external_mcps, list_external_mcps, save_external_mcp,
+    set_external_mcp_enabled, test_external_mcp,
+};
 pub use frp_profiles::{
     delete_frp_profile, get_app_settings, get_last_workspace_id, get_proxy, list_frp_profiles,
     save_frp_profile, set_last_workspace, set_proxy,
@@ -24,14 +28,22 @@ pub use runtime::{
     start_actions_runtime, start_runtime, stop_actions_runtime, stop_runtime,
 };
 pub use secrets::{
-    get_shared_secret, get_workspace_secret, regenerate_shared_secret,
-    regenerate_workspace_secret, set_shared_secret, set_workspace_secret,
+    get_shared_secret, get_workspace_secret, regenerate_shared_secret, regenerate_workspace_secret,
+    set_shared_secret, set_workspace_secret,
+};
+pub use skills::{
+    cancel_skill_install_session, create_skill_install_session, detect_installed_skills,
+    discover_skills, install_skill_dependencies, list_skill_source_roots, list_skills, load_skill,
+    register_detected_skill, register_discovered_skill, register_discovered_skills_batch,
+    register_skill, run_skill_install_terminal, run_skill_terminal, set_skill_execution,
+    skill_install_plan, unregister_skill,
 };
 pub use software::{
-    get_download_config, install_software, list_software, set_download_config,
-    uninstall_software,
+    get_download_config, install_software, list_software, set_download_config, uninstall_software,
 };
 pub use tunnel::{get_frp_snippet, restart_tunnel, start_tunnel, stop_tunnel, test_tunnel};
+pub use ui_memory::{get_webview_memory_sample, recreate_ui_webview};
+pub use window_chrome::{hide_to_tray, quit_app, show_main_window};
 pub use workspace::{
     create_workspace, delete_workspace, list_workspaces, open_workspace_directory, update_workspace,
 };

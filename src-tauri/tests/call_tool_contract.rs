@@ -18,7 +18,7 @@ fn server_info_returns_workspace_and_tools() {
     let ctx = ctx_for(&fx.root);
     let out = invoke(&ctx, "server_info", json!({}));
     let payload = assert_ok(&out);
-    assert_eq!(payload["server"], "coding-tools-mcp");
+    assert_eq!(payload["server"], "MCP-Gateway");
     assert_eq!(payload["version"], env!("CARGO_PKG_VERSION"));
     assert!(payload["tools"].is_array());
     assert!(payload["tool_count"].as_u64().unwrap_or(0) > 0);
@@ -208,13 +208,18 @@ fn core_profile_keeps_the_default_capabilities_and_adds_history_tools() {
         .copied()
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(names, expected);
-    assert_eq!(names.len(), 26);
+    assert_eq!(names.len(), 33);
     assert!(names.contains("grep_text"));
     assert!(names.contains("history_session_bootstrap"));
     assert!(names.contains("history_session_checkpoint"));
     assert!(names.contains("history_session_validate"));
     assert!(names.contains("history_session_search"));
     assert!(names.contains("history_session_read"));
+    assert!(names.contains("skill_list"));
+    assert!(names.contains("skill_match"));
+    assert!(names.contains("mcp_list"));
+    assert!(names.contains("mcp_match"));
+    assert!(names.contains("mcp_call"));
     assert!(!names.contains("harness_status"));
     assert!(!names.contains("start_task"));
 }
@@ -270,7 +275,11 @@ fn direct_exec_uses_the_same_result_contract() {
     let result = invoke(
         &ctx,
         "exec_command",
-        json!({"cmd": format!("{TEST_PYTHON} --version"), "filesystem_scope": "workspace"}),
+        json!({
+            "cmd": format!("{TEST_PYTHON} --version"),
+            "filesystem_scope": "workspace",
+            "yield_time_ms": 5000
+        }),
     );
     let payload = assert_ok(&result);
 
@@ -297,7 +306,8 @@ fn nonzero_command_exit_keeps_transport_ok_but_sets_command_ok_false() {
         "exec_command",
         json!({
             "cmd": format!("{TEST_PYTHON} -c \"import sys; sys.exit(1)\""),
-            "filesystem_scope": "workspace"
+            "filesystem_scope": "workspace",
+            "yield_time_ms": 5000
         }),
     );
     let payload = assert_ok(&result);

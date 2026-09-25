@@ -98,7 +98,11 @@ impl TunnelSupervisor {
     /// Probe active FRP workspaces; restart frpc when process is alive but proxy is dead.
     pub async fn heal_unhealthy_frpc(&mut self, settings: &AppSettings) -> usize {
         let mut workspace_ids: HashSet<String> = self.frpc.keys().cloned().collect();
-        workspace_ids.extend(self.frp_routes.keys().map(|(workspace_id, _)| workspace_id.clone()));
+        workspace_ids.extend(
+            self.frp_routes
+                .keys()
+                .map(|(workspace_id, _)| workspace_id.clone()),
+        );
         let mut restarted = 0usize;
         let host_online = frp::probe_host_network_available().await;
         for workspace_id in workspace_ids {
@@ -299,7 +303,10 @@ impl TunnelSupervisor {
             }
         }
 
-        let state = self.frpc_health.entry(workspace_id.to_string()).or_default();
+        let state = self
+            .frpc_health
+            .entry(workspace_id.to_string())
+            .or_default();
         if !checked_public_route {
             state.public_probe_failures = 0;
             return FrpcHealthVerdict::Healthy;

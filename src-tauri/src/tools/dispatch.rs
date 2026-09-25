@@ -137,6 +137,203 @@ pub fn call_tool(ctx: &ToolContext, name: &str, args: &Value) -> Value {
         "git_show" => git::git_show(ws, &effective_args),
         "git_blame" => git::git_blame(ws, &effective_args),
         "view_image" => image_tool::view_image(ws, &effective_args),
+        "skill_list" => crate::skills::list()
+            .map(|items| {
+                let count = items.len();
+                tool_ok(json!({"skills": items, "count": count}))
+            })
+            .map_err(|e| WorkspaceError::Tool {
+                code: "SKILL_ERROR",
+                message: e,
+                category: "skill",
+                retryable: false,
+            }),
+        "skill_match" => {
+            let task = effective_args
+                .get("task")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let limit = effective_args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(3)
+                .min(10) as usize;
+            let tokens = task
+                .split_whitespace()
+                .filter(|token| token.len() > 1)
+                .collect::<Vec<_>>();
+            crate::skills::list().map(|items| {
+                let mut matches = items.into_iter().map(|item| {
+                    let haystack = format!("{} {} {} {} {}", item.name, item.description, item.tags.join(" "), item.triggers.join(" "), item.capabilities.join(" ")).to_ascii_lowercase();
+                    let hits = tokens.iter().filter(|token| haystack.contains(**token)).count();
+                    let score = if tokens.is_empty() { 0.0 } else { hits as f64 / tokens.len() as f64 };
+                    let reason = if hits == 0 { "no keyword overlap" } else { "task keywords match Skill metadata" };
+                    json!({"skill_id": item.id, "name": item.name, "description": item.description, "tags": item.tags, "triggers": item.triggers, "capabilities": item.capabilities, "availability": item.availability, "can_execute": item.enabled && item.allow_execution && item.availability == crate::skills::model::SkillAvailability::Ready, "score": score, "reason": reason})
+                }).filter(|item| item.get("score").and_then(Value::as_f64).unwrap_or(0.0) > 0.0).collect::<Vec<_>>();
+                matches.sort_by(|a, b| b.get("score").and_then(Value::as_f64).unwrap_or(0.0).partial_cmp(&a.get("score").and_then(Value::as_f64).unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
+                tool_ok(json!({"matches": matches.into_iter().take(limit).collect::<Vec<_>>() }))
+            }).map_err(|e| WorkspaceError::Tool { code: "SKILL_ERROR", message: e, category: "skill", retryable: false })
+        }
+        "skill_load" => {
+            let id = effective_args
+                .get("skill_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let resource = effective_args.get("resource").and_then(Value::as_str);
+            crate::skills::load_content(id, resource)
+                .map(|value| tool_ok(value))
+                .map_err(|e| WorkspaceError::Tool {
+                    code: "SKILL_ERROR",
+                    message: e,
+                    category: "skill",
+                    retryable: false,
+                })
+        }
+        "skill_exec" => {
+            let id = effective_args
+                .get("skill_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let command = effective_args
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            crate::skills::terminal::run_local_for_mcp(id, command)
+                .map(|result| {
+                    tool_ok(serde_json::to_value(result).unwrap_or_else(|_| json!({"ok": false})))
+                })
+                .map_err(|e| WorkspaceError::Tool {
+                    code: "SKILL_EXEC_ERROR",
+                    message: e,
+                    category: "skill",
+                    retryable: false,
+                })
+        }
+        "mcp_list" => {
+            let server_id = effective_args.get("server_id").and_then(Value::as_str);
+            let refresh = effective_args
+                .get("refresh")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let full = effective_args
+                .get("detail")
+                .and_then(Value::as_str)
+                .map(|value| value.eq_ignore_ascii_case("full"))
+                .unwrap_or(false);
+            let handle = tokio::runtime::Handle::try_current();
+            let servers_res = if let Ok(h) = handle {
+                h.block_on(
+                    crate::external_mcp::global_manager()
+                        .list_servers_detailed(server_id, refresh, full),
+                )
+            } else {
+                tauri::async_runtime::block_on(
+                    crate::external_mcp::global_manager()
+                        .list_servers_detailed(server_id, refresh, full),
+                )
+            };
+            servers_res
+                .map(|servers| {
+                    let count = servers.len();
+                    tool_ok(json!({
+                        "servers": servers,
+                        "count": count,
+                        "detail": if full { "full" } else { "summary" }
+                    }))
+                })
+                .map_err(|e| WorkspaceError::Tool {
+                    code: "MCP_LIST_ERROR",
+                    message: e,
+                    category: "mcp",
+                    retryable: false,
+                })
+        }
+        "mcp_match" => {
+            let task = effective_args
+                .get("task")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if task.trim().is_empty() {
+                return tool_err_code(
+                    "INVALID_ARGUMENT",
+                    "Missing task parameter".to_string(),
+                    "validation",
+                );
+            }
+            let limit = effective_args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(5)
+                .clamp(1, 10) as usize;
+            let refresh = effective_args
+                .get("refresh")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let handle = tokio::runtime::Handle::try_current();
+            let match_res = if let Ok(h) = handle {
+                h.block_on(crate::external_mcp::global_manager().match_tools(task, limit, refresh))
+            } else {
+                tauri::async_runtime::block_on(
+                    crate::external_mcp::global_manager().match_tools(task, limit, refresh),
+                )
+            };
+            match_res
+                .map(|matches| {
+                    let count = matches.len();
+                    tool_ok(json!({
+                        "matches": matches,
+                        "count": count,
+                        "hint": if count == 0 {
+                            "No strong match found. Call mcp_list with refresh=true to inspect current external capabilities."
+                        } else {
+                            "Use the selected exposed tool directly when available, otherwise execute it with mcp_call."
+                        }
+                    }))
+                })
+                .map_err(|e| WorkspaceError::Tool {
+                    code: "MCP_MATCH_ERROR",
+                    message: e,
+                    category: "mcp",
+                    retryable: false,
+                })
+        }
+        "mcp_call" => {
+            let server_id = effective_args.get("server_id").and_then(Value::as_str);
+            let tool = effective_args
+                .get("tool")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let empty_obj = json!({});
+            let arguments = effective_args.get("arguments").unwrap_or(&empty_obj);
+            if tool.trim().is_empty() {
+                return tool_err_code(
+                    "INVALID_ARGUMENT",
+                    "Missing tool parameter".to_string(),
+                    "validation",
+                );
+            }
+            let handle = tokio::runtime::Handle::try_current();
+            let call_res = if let Ok(h) = handle {
+                h.block_on(
+                    crate::external_mcp::global_manager()
+                        .call_external_tool_flexible(server_id, tool, arguments),
+                )
+            } else {
+                tauri::async_runtime::block_on(
+                    crate::external_mcp::global_manager()
+                        .call_external_tool_flexible(server_id, tool, arguments),
+                )
+            };
+            call_res
+                .map(|res| tool_ok(res))
+                .map_err(|e| WorkspaceError::Tool {
+                    code: "MCP_CALL_ERROR",
+                    message: e,
+                    category: "mcp",
+                    retryable: false,
+                })
+        }
         "request_permissions" => {
             if ctx.policy.skip_permission_gates() {
                 Ok(tool_ok(json!({
@@ -386,8 +583,8 @@ fn filter_exposed_actions(ctx: &ToolContext, actions: Vec<String>) -> Vec<String
 pub fn server_info(ctx: &ToolContext) -> Result<Value, WorkspaceError> {
     let tools = crate::tools::registry::exposed_tool_names(&ctx.tool_profile);
     Ok(tool_ok(json!({
-        "server": "coding-tools-mcp",
-        "title": "Coding Tools MCP",
+        "server": "MCP-Gateway",
+        "title": "MCP-Gateway",
         "version": env!("CARGO_PKG_VERSION"),
         "protocol_version": "2025-06-18",
         "workspace": ctx.workspace.root_display(),

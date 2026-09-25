@@ -1,12 +1,12 @@
 {
-  "name": "coding-tools-mcp-desktop",
-  "version": "0.2.1",
-  "description": "Coding Tools MCP desktop client",
+  "name": "mcp-gateway",
+  "version": "0.3.0",
+  "description": "MCP-Gateway Desktop Client",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
     "desktop": "tauri dev",
-    "desktop:build": "tauri build",
+    "desktop:build": "tauri build --ci",
     "start": "tauri dev",
     "build": "vite build",
     "preview": "vite preview",

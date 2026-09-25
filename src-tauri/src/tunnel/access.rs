@@ -42,9 +42,7 @@ pub fn ensure_frp_health_loop() {
             let recovered = update_host_network_state(online);
             let mut guard = supervisor().lock().await;
             if recovered {
-                let _ = guard
-                    .restart_frpc_after_network_recovery(&settings)
-                    .await;
+                let _ = guard.restart_frpc_after_network_recovery(&settings).await;
             }
             let _ = guard.heal_unhealthy_frpc(&settings).await;
         }

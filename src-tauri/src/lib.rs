@@ -6,6 +6,7 @@ mod auth;
 mod commands;
 mod data;
 mod error;
+pub mod external_mcp;
 pub mod harness;
 mod health;
 mod mcp;
@@ -13,6 +14,7 @@ mod platform;
 mod runtime;
 mod secret;
 mod settings;
+pub mod skills;
 pub mod tools;
 mod tunnel;
 mod update;
@@ -20,16 +22,23 @@ mod workspace;
 
 use app_state::AppState;
 use commands::{
-    check_app_update, create_workspace, delete_frp_profile, delete_workspace,
-    get_actions_runtime_status, get_app_settings, get_download_config, get_frp_snippet,
-    get_last_workspace_id, get_proxy, get_runtime_status, get_shared_secret, get_webview_memory_sample,
-    get_workspace_secret, hide_to_tray, install_software, list_frp_profiles, list_software,
-    list_workspaces, open_url, open_workspace_directory, quit_app, read_workspace_logs,
-    recreate_ui_webview, regenerate_shared_secret, regenerate_workspace_secret,
-    restart_actions_runtime, restart_runtime, restart_tunnel, run_health_checks, save_frp_profile,
-    set_download_config, set_last_workspace, set_proxy, set_shared_secret, set_workspace_secret,
-    show_main_window, start_actions_runtime, start_runtime, start_tunnel, stop_actions_runtime,
-    stop_runtime, stop_tunnel, test_tunnel, uninstall_software, update_workspace,
+    cancel_skill_install_session, check_app_update, create_skill_install_session, create_workspace,
+    delete_external_mcp, delete_frp_profile, delete_workspace, detect_installed_skills,
+    discover_external_mcps, discover_skills, get_actions_runtime_status, get_app_settings,
+    get_download_config, get_frp_snippet, get_last_workspace_id, get_proxy, get_runtime_status,
+    get_shared_secret, get_webview_memory_sample, get_workspace_secret, hide_to_tray,
+    install_skill_dependencies, install_software, list_external_mcps, list_frp_profiles,
+    list_skill_source_roots, list_skills, list_software, list_workspaces, load_skill, open_url,
+    open_workspace_directory, quit_app, read_workspace_logs, recreate_ui_webview,
+    regenerate_shared_secret, regenerate_workspace_secret, register_detected_skill,
+    register_discovered_skill, register_discovered_skills_batch, register_skill,
+    restart_actions_runtime, restart_runtime, restart_tunnel, run_health_checks,
+    run_skill_install_terminal, run_skill_terminal, save_external_mcp, save_frp_profile,
+    set_download_config, set_external_mcp_enabled, set_last_workspace, set_proxy,
+    set_shared_secret, set_skill_execution, set_workspace_secret, show_main_window,
+    skill_install_plan, start_actions_runtime, start_runtime, start_tunnel, stop_actions_runtime,
+    stop_runtime, stop_tunnel, test_external_mcp, test_tunnel, uninstall_software,
+    unregister_skill, update_workspace,
 };
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -38,7 +47,7 @@ use tauri::{Emitter, Manager, WindowEvent};
 #[cfg(target_os = "windows")]
 fn signal_existing_instance() -> bool {
     use windows::core::w;
-    use windows::Win32::Foundation::{CloseHandle, HANDLE, GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
     use windows::Win32::System::Threading::{
         CreateEventW, CreateMutexW, OpenEventW, SetEvent, EVENT_MODIFY_STATE,
     };
@@ -119,7 +128,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .tooltip("Coding Tools MCP")
+        .tooltip("MCP-Gateway")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 let _ = commands::window_chrome::show_main_window(app.clone());
@@ -215,6 +224,29 @@ pub fn run() {
             hide_to_tray,
             show_main_window,
             quit_app,
+            discover_skills,
+            list_skill_source_roots,
+            install_skill_dependencies,
+            list_skills,
+            register_skill,
+            unregister_skill,
+            load_skill,
+            skill_install_plan,
+            run_skill_terminal,
+            create_skill_install_session,
+            run_skill_install_terminal,
+            set_skill_execution,
+            detect_installed_skills,
+            register_detected_skill,
+            register_discovered_skill,
+            register_discovered_skills_batch,
+            cancel_skill_install_session,
+            list_external_mcps,
+            save_external_mcp,
+            delete_external_mcp,
+            set_external_mcp_enabled,
+            test_external_mcp,
+            discover_external_mcps,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

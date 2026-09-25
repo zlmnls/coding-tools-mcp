@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::http::{header::AUTHORIZATION, HeaderMap, StatusCode};
+use axum::http::{
+    header::{AUTHORIZATION, WWW_AUTHENTICATE},
+    HeaderMap, StatusCode,
+};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
@@ -19,6 +22,7 @@ pub const OAUTH_MAX_BODY_BYTES: usize = 8_192;
 
 #[derive(Clone)]
 pub struct OAuthRuntime {
+    pub canonical_server_url: String,
     pub client_id: String,
     pub client_secret: Option<String>,
     pub password: String,
@@ -48,13 +52,14 @@ struct TokenClaims {
 
 impl OAuthRuntime {
     pub fn new(
-        _base_url: String,
+        base_url: String,
         client_id: String,
         client_secret: Option<String>,
         password: String,
         token_secret: String,
     ) -> Self {
         Self {
+            canonical_server_url: base_url.trim_end_matches('/').to_string(),
             client_id,
             client_secret,
             password,
@@ -74,7 +79,11 @@ impl OAuthRuntime {
     }
 
     pub fn verify_access_token(&self, token: &str, server_url: &str) -> bool {
-        let server_url = server_url.trim_end_matches('/');
+        let server_url = if self.canonical_server_url.is_empty() {
+            server_url.trim_end_matches('/')
+        } else {
+            self.canonical_server_url.as_str()
+        };
         let mut validation = Validation::new(Algorithm::HS256);
         validation.set_audience(&[server_url]);
         validation.set_issuer(&[server_url]);
@@ -92,19 +101,51 @@ pub fn verify_oauth_bearer_header(
     oauth: &OAuthRuntime,
     server_url: &str,
 ) -> Option<Response> {
+    let challenge = format!(
+        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"",
+        oauth.canonical_server_url.trim_end_matches('/')
+    );
     let Some(header_value) = headers.get(AUTHORIZATION) else {
-        return Some((StatusCode::UNAUTHORIZED, "Missing Authorization header").into_response());
+        return Some(
+            (
+                StatusCode::UNAUTHORIZED,
+                [(WWW_AUTHENTICATE, challenge.as_str())],
+                "Missing Authorization header",
+            )
+                .into_response(),
+        );
     };
     let Ok(header_str) = header_value.to_str() else {
-        return Some((StatusCode::UNAUTHORIZED, "Invalid Authorization header").into_response());
+        return Some(
+            (
+                StatusCode::UNAUTHORIZED,
+                [(WWW_AUTHENTICATE, challenge.as_str())],
+                "Invalid Authorization header",
+            )
+                .into_response(),
+        );
     };
     let Some(token) = header_str.strip_prefix("Bearer ").map(str::trim) else {
-        return Some((StatusCode::UNAUTHORIZED, "Invalid bearer token").into_response());
+        return Some(
+            (
+                StatusCode::UNAUTHORIZED,
+                [(WWW_AUTHENTICATE, challenge.as_str())],
+                "Invalid bearer token",
+            )
+                .into_response(),
+        );
     };
     if oauth.verify_access_token(token, server_url) {
         None
     } else {
-        Some((StatusCode::UNAUTHORIZED, "Invalid bearer token").into_response())
+        Some(
+            (
+                StatusCode::UNAUTHORIZED,
+                [(WWW_AUTHENTICATE, challenge.as_str())],
+                "Invalid bearer token",
+            )
+                .into_response(),
+        )
     }
 }
 
@@ -211,7 +252,12 @@ pub fn authorize_post(oauth: &OAuthRuntime, form: AuthorizeForm, server_url: &st
             .into_response();
     }
 
-    let server_url = server_url.trim_end_matches('/').to_string();
+    // 授权码绑定的服务器标识固定为单一 canonical 域名，避免请求头/多域名导致漂移。
+    let server_url = if oauth.canonical_server_url.is_empty() {
+        server_url.trim_end_matches('/').to_string()
+    } else {
+        oauth.canonical_server_url.clone()
+    };
     let code = uuid::Uuid::new_v4().to_string().replace('-', "");
     let now = unix_now();
     {
@@ -234,7 +280,11 @@ pub fn authorize_post(oauth: &OAuthRuntime, form: AuthorizeForm, server_url: &st
     if !form.state.is_empty() {
         qs.push_str(&format!("&state={}", urlencoding_encode(&form.state)));
     }
-    let sep = if form.redirect_uri.contains('?') { '&' } else { '?' };
+    let sep = if form.redirect_uri.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
     // 授权页面通过 POST 表单提交，但客户端回调必须使用 GET。
     // 307 会保留 POST 并把表单体转发到 ChatGPT connector，导致 Bad Request。
     Redirect::to(&format!("{}{}{}", form.redirect_uri, sep, qs)).into_response()
@@ -246,8 +296,12 @@ pub fn token_exchange(
     mut form: TokenForm,
     server_url: &str,
 ) -> Response {
+    let _ = server_url;
     if form.grant_type != "authorization_code" {
-        return token_error("unsupported_grant_type", "Only authorization_code is supported");
+        return token_error(
+            "unsupported_grant_type",
+            "Only authorization_code is supported",
+        );
     }
 
     if let Some((id, secret)) = basic_auth_credentials(headers) {
@@ -279,7 +333,10 @@ pub fn token_exchange(
         pending.remove(&form.code)
     };
     let Some(code_data) = code_data else {
-        return token_error("invalid_grant", "Unknown or already-used authorization code");
+        return token_error(
+            "invalid_grant",
+            "Unknown or already-used authorization code",
+        );
     };
     if unix_now() > code_data.expires_at {
         return token_error("invalid_grant", "Authorization code expired");
@@ -294,10 +351,15 @@ pub fn token_exchange(
         return token_error("invalid_grant", "PKCE verification failed");
     }
 
-    let issuer = if code_data.server_url.trim().is_empty() {
-        server_url.trim_end_matches('/').to_string()
+    // 签发与校验必须使用同一个 canonical URL，避免 iss/aud 因请求头不同而漂移导致 401。
+    let issuer = if oauth.canonical_server_url.is_empty() {
+        code_data
+            .server_url
+            .trim()
+            .trim_end_matches('/')
+            .to_string()
     } else {
-        code_data.server_url.trim_end_matches('/').to_string()
+        oauth.canonical_server_url.clone()
     };
     match create_access_token(&issuer, &oauth.token_secret, OAUTH_TOKEN_TTL_SECONDS) {
         Ok(access_token) => (
@@ -389,12 +451,12 @@ fn login_page(
         .unwrap_or_default();
     format!(
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>\
-        <title>Authorize MCP Server</title>\
+        <title>Authorize MCP-Gateway</title>\
         <style>body{{font-family:sans-serif;max-width:380px;margin:4rem auto;padding:1rem}}\
         input{{width:100%;padding:.5rem;margin:.4rem 0;box-sizing:border-box}}\
         button{{width:100%;padding:.7rem;background:#0066cc;color:#fff;border:none;cursor:pointer}}</style>\
         </head><body>\
-        <h2>Authorize Coding Tools MCP</h2>\
+        <h2>Authorize MCP-Gateway</h2>\
         {workspace_block}\
         <p>Client: <strong>{}</strong></p>\
         <p>Redirect URI: <code>{}</code></p>\
@@ -451,6 +513,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn authorization_page_uses_mcp_gateway_branding() {
+        let page = login_page(
+            "chatgpt-client-test",
+            "https://chatgpt.com/connector/oauth/test",
+            "challenge",
+            "S256",
+            "state",
+            "",
+            None,
+        );
+
+        assert!(page.contains("Authorize MCP-Gateway"));
+        assert!(!page.contains("Coding Tools MCP"));
+    }
+
+    #[test]
     fn token_exchange_without_client_secret() {
         use axum::http::HeaderMap;
 
@@ -503,5 +581,69 @@ mod tests {
         let verifier = "dBjftJeZ4CVP-mB92Kpru-AEJvkQlLgi3ThpmQ45N_Xyo";
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         assert!(verify_pkce(verifier, &challenge));
+    }
+
+    #[test]
+    fn token_issued_against_canonical_url_verifies_even_with_different_request_url() {
+        use axum::body::to_bytes;
+        use axum::http::HeaderMap;
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+        // canonical 固定为配置 URL，与请求头/隧道可能派生的 URL 不同。
+        let oauth = OAuthRuntime::new(
+            "https://canonical.example.com".into(),
+            "chatgpt-client-test".into(),
+            None,
+            "test-password".into(),
+            "token-signing-secret".into(),
+        );
+        let verifier = "dBjftJeZ4CVP-mB92Kpru-AEJvkQlLgi3ThpmQ45N_Xyo";
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let redirect_uri = "https://chatgpt.com/connector/oauth/test";
+
+        // 授权码与 token 请求都携带“错误的”请求派生 URL。
+        authorize_post(
+            &oauth,
+            AuthorizeForm {
+                client_id: "chatgpt-client-test".into(),
+                redirect_uri: redirect_uri.into(),
+                code_challenge: challenge,
+                code_challenge_method: "S256".into(),
+                state: String::new(),
+                password: "test-password".into(),
+            },
+            "https://kd98d.example.com",
+        );
+        let code = {
+            let pending = oauth.pending.lock().expect("lock");
+            pending.keys().next().cloned().unwrap()
+        };
+        let response = token_exchange(
+            &oauth,
+            &HeaderMap::new(),
+            TokenForm {
+                grant_type: "authorization_code".into(),
+                code,
+                redirect_uri: redirect_uri.into(),
+                code_verifier: verifier.into(),
+                client_id: "chatgpt-client-test".into(),
+                client_secret: String::new(),
+            },
+            "https://kd98d.example.com",
+        );
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body: serde_json::Value = {
+            let bytes = runtime.block_on(async {
+                to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("read body")
+            });
+            serde_json::from_slice(&bytes).expect("json body")
+        };
+        // 签发用 canonical：即便用请求派生 URL 校验也应当通过。
+        let access_token = body["access_token"].as_str().expect("access_token present");
+        assert!(oauth.verify_access_token(access_token, "https://kd98d.example.com"));
+        assert!(oauth.verify_access_token(access_token, "https://canonical.example.com"));
     }
 }

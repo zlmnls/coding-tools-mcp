@@ -634,9 +634,15 @@ async fn wait_for_frpc_ready(
         let detail = read_log_since(log_path, log_offset);
         // With loginFailExit=false the process stays alive through DNS/outages.
         // Keep supervising it instead of killing the only recovery path.
-        if detail.to_ascii_lowercase().contains("login to the server failed")
-            || detail.to_ascii_lowercase().contains("connect to server error")
-            || detail.to_ascii_lowercase().contains("try to connect to server")
+        if detail
+            .to_ascii_lowercase()
+            .contains("login to the server failed")
+            || detail
+                .to_ascii_lowercase()
+                .contains("connect to server error")
+            || detail
+                .to_ascii_lowercase()
+                .contains("try to connect to server")
         {
             return Ok(true);
         }

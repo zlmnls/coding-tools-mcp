@@ -1,8 +1,8 @@
 [package]
 name = "coding-tools-mcp-desktop"
-version = "0.2.1"
-description = "Coding Tools MCP desktop client"
-authors = ["Coding Tools MCP Contributors"]
+version = "0.3.0"
+description = "MCP-Gateway desktop client"
+authors = ["MCP-Gateway Contributors"]
 edition = "2021"
 
 [lib]

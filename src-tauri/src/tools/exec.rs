@@ -4,6 +4,9 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+#[cfg(target_os = "macos")]
+use std::sync::OnceLock;
+
 use serde_json::{json, Value};
 use tokio::process::Command;
 
@@ -242,6 +245,15 @@ async fn run_command(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+
+    // GUI/Tauri apps launched from Finder/LaunchServices do not necessarily inherit the
+    // user's interactive shell PATH. Keep child processes on the same PATH used to resolve
+    // commands below, otherwise an npm/pnpm shim such as lark-cli can resolve successfully
+    // but still fail when its `#!/usr/bin/env node` shebang cannot find `node`.
+    #[cfg(target_os = "macos")]
+    if let Some(path) = macos_interactive_shell_path() {
+        command.env("PATH", path);
+    }
 
     #[cfg(windows)]
     command
@@ -605,14 +617,106 @@ fn resolve_program(
         });
     }
 
-    which::which(trimmed)
-        .map(|p| p.to_string_lossy().into_owned())
-        .map_err(|_| WorkspaceError::Tool {
+    // 应用进程继承的 PATH 可能不含交互 shell（.zshrc/.zprofile）里追加的目录，
+    // 导致 lark-cli、puknow 等安装在用户 shell PATH 上的命令“找不到”。
+    // 先在应用 PATH 中解析；macOS 再使用交互登录 zsh 的 PATH 兜底。
+    match which::which(trimmed) {
+        Ok(path) => Ok(path.to_string_lossy().into_owned()),
+        Err(_) => resolve_program_via_user_shell(trimmed).ok_or_else(|| WorkspaceError::Tool {
             code: "COMMAND_REJECTED",
             message: format!("Program not found on PATH: {trimmed}"),
             category: "runtime",
             retryable: false,
+        }),
+    }
+}
+
+fn safe_program_name(program: &str) -> bool {
+    !program.is_empty()
+        && program
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '@' | '+' | '-'))
+}
+
+fn resolve_program_in_path(program: &str, path: &str) -> Option<String> {
+    if !safe_program_name(program) {
+        return None;
+    }
+    std::env::split_paths(std::ffi::OsStr::new(path))
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| candidate.to_string_lossy().into_owned())
+}
+
+#[cfg(target_os = "macos")]
+const SHELL_PATH_MARKER: &str = "__CODING_TOOLS_PATH__";
+
+#[cfg(target_os = "macos")]
+fn parse_shell_path(stdout: &str) -> Option<String> {
+    stdout.lines().rev().find_map(|line| {
+        line.strip_prefix(SHELL_PATH_MARKER)
+            .filter(|path| !path.trim().is_empty())
+            .map(str::to_owned)
+    })
+}
+
+/// Finder/LaunchServices 启动的 Tauri 应用通常拿不到 Terminal 的 PATH。
+/// 用一次交互登录 zsh 同时加载 .zprofile 和 .zshrc，并缓存最终 PATH。
+/// 若用户通过 NVM 管理 Node，再显式加载默认 Node 版本，避免 GUI 进程能找到
+/// lark-cli 等工具但找不到 npm/node。
+/// 输出带固定 marker，避免 .zshrc 中的 banner/echo 污染解析结果。
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_interactive_shell_path() -> Option<&'static str> {
+    static USER_PATH: OnceLock<Option<String>> = OnceLock::new();
+    USER_PATH
+        .get_or_init(|| {
+            let output = std::process::Command::new("/bin/zsh")
+                .args([
+                    "-ilc",
+                    "if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\" >/dev/null 2>&1; nvm use --silent default >/dev/null 2>&1 || true; fi; printf '__CODING_TOOLS_PATH__%s\\n' \"$PATH\"",
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            let stdout = String::from_utf8(output.stdout).ok()?;
+            parse_shell_path(&stdout)
         })
+        .as_deref()
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_program_via_user_shell(program: &str) -> Option<String> {
+    let path = macos_interactive_shell_path()?;
+    resolve_program_in_path(program, path)
+}
+
+/// 非 macOS 保留原来的登录 shell 兜底行为。
+#[cfg(not(target_os = "macos"))]
+fn resolve_program_via_user_shell(program: &str) -> Option<String> {
+    if !safe_program_name(program) {
+        return None;
+    }
+    let output = std::process::Command::new("/bin/zsh")
+        .args(["-lc", &format!("command -v {program}")])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if path.is_empty() || !path.starts_with('/') {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 #[cfg(test)]
@@ -643,6 +747,30 @@ mod tests {
                 retryable: false,
             },
             "COMMAND_REJECTED",
+        );
+    }
+
+    #[test]
+    fn resolves_program_from_an_explicit_path_list() {
+        let dir = tempdir().expect("path dir");
+        let program = dir.path().join("custom-cli");
+        std::fs::write(&program, "test").expect("program");
+        let path = std::env::join_paths([dir.path()])
+            .expect("join path")
+            .to_string_lossy()
+            .into_owned();
+
+        let resolved = resolve_program_in_path("custom-cli", &path).expect("resolved");
+        assert_eq!(std::path::Path::new(&resolved), program.as_path());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn shell_path_parser_ignores_zsh_startup_noise() {
+        let stdout = "welcome from zshrc\n__CODING_TOOLS_PATH__/opt/homebrew/bin:/usr/bin\n";
+        assert_eq!(
+            parse_shell_path(stdout).as_deref(),
+            Some("/opt/homebrew/bin:/usr/bin")
         );
     }
 
@@ -715,7 +843,8 @@ mod tests {
         // Ensure console-subsystem programs (python.exe) also go through the
         // hidden-window flag path; Command does not expose creation_flags for
         // direct assertion, so this only verifies construction still succeeds.
-        let python = command_for_program("C:/Python312/python.exe", &["-c".into(), "print(1)".into()]);
+        let python =
+            command_for_program("C:/Python312/python.exe", &["-c".into(), "print(1)".into()]);
         assert_eq!(
             python.as_std().get_program().to_string_lossy(),
             "C:/Python312/python.exe"

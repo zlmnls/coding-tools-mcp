@@ -74,9 +74,9 @@ pub fn build_openapi(tools: &[Value], public_base_url: &str, auth_type: &str) ->
     let mut document = json!({
         "openapi": "3.1.0",
         "info": {
-            "title": "Coding Tools Actions",
+            "title": "MCP-Gateway Actions",
             "version": env!("CARGO_PKG_VERSION"),
-            "description": "Read, modify and test a workspace through coding-tools-mcp."
+            "description": "Read, modify and test a workspace through MCP-Gateway."
         },
         "servers": [{ "url": public_base_url.trim_end_matches('/') }],
         "paths": paths,

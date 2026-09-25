@@ -1,0 +1,80 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- 背景曜石深灰微渐变 -->
+    <linearGradient id="bgA" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1c1d29"/>
+      <stop offset="40%" stop-color="#12131c"/>
+      <stop offset="100%" stop-color="#08090d"/>
+    </linearGradient>
+
+    <!-- 网关大拱门流光渐变 -->
+    <linearGradient id="gateGrad" x1="220" y1="220" x2="800" y2="800" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="50%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#d946ef"/>
+    </linearGradient>
+
+    <!-- 内层细线光晕 -->
+    <linearGradient id="innerGateGrad" x1="300" y1="300" x2="720" y2="720" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+
+    <!-- 核心光球发光滤镜 -->
+    <filter id="glowCore" x="312" y="312" width="400" height="400" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="36" result="blur"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.388 0 0 0 0 0.4 0 0 0 0 0.945 0 0 0 0.7 0"/>
+      <feBlend mode="screen" in2="SourceGraphic" result="blend"/>
+    </filter>
+
+    <!-- 拱门发光滤镜 -->
+    <filter id="glowGate" x="180" y="180" width="664" height="664" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="24" result="blurGate"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.545 0 0 0 0 0.36 0 0 0 0 0.96 0 0 0 0.35 0"/>
+      <feBlend mode="screen" in2="SourceGraphic"/>
+    </filter>
+
+    <!-- 核心光环渐变 -->
+    <radialGradient id="coreHalo" cx="512" cy="512" r="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="35%" stop-color="#38bdf8"/>
+      <stop offset="75%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- macOS 标准圆角矩形背景 (Squircle rx=224 for 1024x1024) -->
+  <rect width="1024" height="1024" rx="224" fill="url(#bgA)"/>
+  <rect x="6" y="6" width="1012" height="1012" rx="218" stroke="rgba(255,255,255,0.09)" stroke-width="12"/>
+
+  <!-- 底部微光网格感衬托 -->
+  <circle cx="512" cy="512" r="360" stroke="rgba(255,255,255,0.03)" stroke-width="3" stroke-dasharray="16 16"/>
+
+  <!-- 发光底衬 -->
+  <g filter="url(#glowGate)">
+    <!-- 拱门主体 (Gateway Arch) -->
+    <path d="M320 736 V416 C320 310 406 224 512 224 C618 224 704 310 704 416 V736" stroke="url(#gateGrad)" stroke-width="64" stroke-linecap="round"/>
+  </g>
+
+  <!-- 拱门内圈辅助光环轨线 -->
+  <path d="M416 736 V448 C416 395 459 352 512 352 C565 352 608 395 608 448 V736" stroke="url(#innerGateGrad)" stroke-width="20" stroke-linecap="round" stroke-opacity="0.8"/>
+
+  <!-- 核心能量光晕 -->
+  <circle cx="512" cy="512" r="120" fill="url(#coreHalo)" filter="url(#glowCore)"/>
+  <!-- 核心晶体中心点 -->
+  <circle cx="512" cy="512" r="32" fill="#ffffff"/>
+
+  <!-- 拱门顶点数据信标点 -->
+  <circle cx="512" cy="224" r="28" fill="#d946ef"/>
+  <circle cx="512" cy="224" r="14" fill="#ffffff"/>
+
+  <!-- 左右基座脉冲锚点 -->
+  <circle cx="320" cy="736" r="32" fill="#6366f1"/>
+  <circle cx="320" cy="736" r="14" fill="#ffffff"/>
+  <circle cx="704" cy="736" r="32" fill="#ec4899"/>
+  <circle cx="704" cy="736" r="14" fill="#ffffff"/>
+
+  <!-- 内部连线粒子 -->
+  <circle cx="416" cy="736" r="12" fill="#38bdf8"/>
+  <circle cx="608" cy="736" r="12" fill="#818cf8"/>
+</svg>

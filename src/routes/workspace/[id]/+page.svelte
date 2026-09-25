@@ -11,7 +11,6 @@
   import RuntimePolicyForm, {
     type RuntimePolicyDraft,
   } from "$lib/components/RuntimePolicyForm.svelte";
-  import ChatGptSessionPrompt from "$lib/components/ChatGptSessionPrompt.svelte";
   import ServicePanel from "$lib/components/ServicePanel.svelte";
   import GptQuickCopy from "$lib/components/GptQuickCopy.svelte";
   import StatusOrb from "$lib/components/StatusOrb.svelte";
@@ -73,14 +72,51 @@
   let frpProfiles = $state<FrpProfileDto[]>([]);
 
   let activeService = $state<ServiceTab>("mcp");
-  let mcpSubTab = $state<SubTab>("config");
-  let actionsSubTab = $state<SubTab>("config");
+  let mcpSubTab = $state<SubTab>("logs");
+  let actionsSubTab = $state<SubTab>("logs");
   let loadGeneration = 0;
 
+  let showGptModal = $state(false);
+  let showSettingsModal = $state(false);
+  let restartingTunnel = $state(false);
+
+  async function handleQuickRestartTunnel() {
+    if (!workspaceId || !profile || restartingTunnel) return;
+    restartingTunnel = true;
+    try {
+      const status = await restartTunnel(workspaceId, activeService);
+      if (status.publicUrl) {
+        if (activeService === "mcp") {
+          mcpPublic = `${status.publicUrl.replace(/\/$/, "")}/mcp`;
+        } else {
+          actionsPublic = `${status.publicUrl.replace(/\/$/, "")}/openapi.json`;
+        }
+      }
+      showToast("已触发隧道重新连接", { kind: "success" });
+    } catch (error) {
+      showToast(String(error), { title: "隧道重启失败", kind: "error" });
+    } finally {
+      restartingTunnel = false;
+    }
+  }
+
+  async function copyEndpoint(url: string) {
+    if (!url) {
+      showToast("当前暂无公网地址", { kind: "warning" });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast("已复制地址到剪贴板", { kind: "success" });
+    } catch {
+      showToast("复制失败", { kind: "error" });
+    }
+  }
+
   const subTabs = [
-    { value: "config", label: "配置" },
-    { value: "logs", label: "日志" },
-    { value: "health", label: "健康" },
+    { value: "logs", label: "实时日志" },
+    { value: "config", label: "网络与隧道配置" },
+    { value: "health", label: "健康检查" },
   ];
 
   const workspaceId = $derived($page.params.id);
@@ -535,221 +571,306 @@
 </script>
 
 {#if profile && actions}
-  <section class="page-scroll">
-    <header class="page-header">
-      <div class="flex items-start justify-between gap-4">
-        <div>
-          <p class="page-kicker">工作区</p>
-          <h2 class="page-title">{profile.name}</h2>
+  {@const isRunning = activeService === "mcp" ? mcpStatus === "running" : actionsStatus === "running"}
+  {@const currentPublic = activeService === "mcp" ? mcpPublic : actionsPublic}
+  {@const currentPort = activeService === "mcp" ? profile.runtime.local_port : actions.local_port}
+  {@const currentTunnelType = activeService === "mcp" ? profile.tunnel.type : actions.tunnel_type}
+
+  <section class="page-scroll flex flex-col h-full">
+    <!-- 顶部状态与快速自救栏 -->
+    <header class="page-header border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur px-6 py-4">
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <!-- 左侧：工作区与运行指示 -->
+        <div class="flex items-center gap-3 min-w-0">
+          <span class="h-3 w-3 rounded-full shrink-0 {isRunning ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.9)]' : 'bg-gray-400'}"></span>
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <h2 class="text-lg font-bold text-[var(--color-text)] truncate">{profile.name}</h2>
+              <span class="rounded px-2 py-0.5 text-[11px] font-mono font-medium {isRunning ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-gray-500/10 text-gray-500'}">
+                {activeService.toUpperCase()} {stateLabel(activeService === "mcp" ? mcpStatus : actionsStatus)}
+              </span>
+            </div>
+            <p class="text-xs text-[var(--color-text-muted)] font-mono truncate max-w-md mt-0.5" title={profile.path}>
+              📁 {profile.path}
+            </p>
+          </div>
         </div>
-        <button
-          type="button"
-          class="tx-btn-ghost text-[var(--danger)]"
-          onclick={() => void removeWorkspace()}
-        >
-          删除工作区
-        </button>
+
+        <!-- 右侧：高频自救与连接操作组 -->
+        <div class="flex flex-wrap items-center gap-2">
+          <!-- 服务模式切换 -->
+          <div class="flex items-center rounded-lg border border-[var(--color-border)] bg-black/5 dark:bg-white/5 p-0.5 text-xs mr-1">
+            <button
+              type="button"
+              class="rounded px-2.5 py-1 font-medium transition-colors {activeService === 'mcp' ? 'bg-white dark:bg-gray-800 shadow-sm text-black dark:text-white' : 'text-[var(--color-text-muted)] hover:text-black dark:hover:text-white'}"
+              onclick={() => (activeService = "mcp")}
+            >
+              MCP 服务
+            </button>
+            <button
+              type="button"
+              class="rounded px-2.5 py-1 font-medium transition-colors {activeService === 'actions' ? 'bg-white dark:bg-gray-800 shadow-sm text-black dark:text-white' : 'text-[var(--color-text-muted)] hover:text-black dark:hover:text-white'}"
+              onclick={() => (activeService = "actions")}
+            >
+              Actions 服务
+            </button>
+          </div>
+
+          <!-- 高频操作 1：一键重启隧道 -->
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 transition-colors shadow-sm"
+            disabled={restartingTunnel}
+            onclick={handleQuickRestartTunnel}
+            title="隧道异常、连接超时或掉线时快速重新打通公网隧道"
+          >
+            <span>{restartingTunnel ? "重启中…" : "⚡ 重启隧道"}</span>
+          </button>
+
+          <!-- 启停服务 -->
+          {#if activeService === "mcp"}
+            <button
+              type="button"
+              class="rounded-lg px-3.5 py-1.5 text-xs font-medium text-white shadow-sm transition-all {mcpStatus === 'running' ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'}"
+              disabled={mcpBusy}
+              onclick={toggleMcp}
+            >
+              {mcpBusy ? "处理中…" : mcpStatus === "running" ? "停止服务" : "启动服务"}
+            </button>
+          {:else}
+            <button
+              type="button"
+              class="rounded-lg px-3.5 py-1.5 text-xs font-medium text-white shadow-sm transition-all {actionsStatus === 'running' ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'}"
+              disabled={actionsBusy}
+              onclick={toggleActions}
+            >
+              {actionsBusy ? "处理中…" : actionsStatus === "running" ? "停止服务" : "启动服务"}
+            </button>
+          {/if}
+
+          <!-- 低频操作：连接指南弹窗 -->
+          <button
+            type="button"
+            class="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs font-medium hover:border-[var(--color-accent)] transition-colors shadow-sm"
+            onclick={() => (showGptModal = true)}
+          >
+            📋 连接到 GPT
+          </button>
+
+          <!-- 高级配置抽屉 -->
+          <button
+            type="button"
+            class="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+            onclick={() => (showSettingsModal = true)}
+            title="隧道参数、认证模式与目录设置"
+          >
+            ⚙ 设置
+          </button>
+        </div>
       </div>
 
-      <div class="mt-4">
-        <WorkspaceMetaForm
-          name={profile.name}
-          path={profile.path}
-          onSave={saveWorkspaceName}
-          onUpdatePath={saveWorkspacePath}
-        />
-      </div>
+      <!-- 紧凑公网状态条 -->
+      <div class="mt-3.5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-black/[0.02] dark:bg-white/[0.02] px-3.5 py-2 text-xs">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="text-[var(--color-text-muted)] font-medium shrink-0">公网端点:</span>
+          {#if currentPublic}
+            <span class="font-mono text-[var(--color-accent)] font-semibold truncate select-all">{currentPublic}</span>
+            <button
+              type="button"
+              class="rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] hover:bg-black/5 dark:hover:bg-white/10 shrink-0"
+              onclick={() => void copyEndpoint(currentPublic)}
+            >
+              复制
+            </button>
+          {:else}
+            <span class="text-[var(--color-text-muted)] italic">未分配公网端点（启动服务或检查隧道设置）</span>
+          {/if}
+        </div>
 
-      <div class="mt-4">
-        <ChatGptSessionPrompt />
-      </div>
-
-      <div class="mt-4 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          class="tx-status-pill"
-          class:active={activeService === "mcp"}
-          onclick={() => (activeService = "mcp")}
-        >
-          <StatusOrb state={mcpStatus} />
-          <span class="font-medium">MCP</span>
-          <span class="text-[var(--color-text-muted)]">{stateLabel(mcpStatus)}</span>
-        </button>
-        <button
-          type="button"
-          class="tx-status-pill"
-          class:active={activeService === "actions"}
-          onclick={() => (activeService = "actions")}
-        >
-          <StatusOrb state={actionsStatus} />
-          <span class="font-medium">Actions</span>
-          <span class="text-[var(--color-text-muted)]">{stateLabel(actionsStatus)}</span>
-        </button>
+        <div class="flex items-center gap-3 text-[var(--color-text-muted)] shrink-0 font-mono text-[11px]">
+          <span>本地端口: {currentPort}</span>
+          <span>隧道类型: {currentTunnelType.toUpperCase()}</span>
+          <span>认证: {profile.auth.type.toUpperCase()}</span>
+        </div>
       </div>
     </header>
 
-    <div class="page-body">
+    <!-- 核心主体监控视窗（页面主角） -->
+    <div class="page-body flex-1 p-6">
       {#if activeService === "mcp"}
-        <div class="mt-4 flex flex-col gap-3">
-          <ServicePanel
-            title="MCP"
-            subtitle="Streamable HTTP · 工具运行时"
-            status={mcpStatus}
-            statusMessage={mcpStatusMessage}
-            port={profile.runtime.local_port}
-            portEditable={true}
-            busy={mcpBusy}
-            tunnelType={profile.tunnel.type}
-            localEndpoint={mcpLocal || mcpLocalEndpoint(profile.runtime.local_port)}
-            publicEndpoint={mcpPublic}
-            publicLabel="公网 MCP"
-            onToggle={toggleMcp}
-            onPortChange={saveMcpPort}
-          />
-          <GptQuickCopy
-            workspaceId={workspaceId!}
-            service="mcp"
-            {profile}
-            publicMcpEndpoint={mcpPublic}
-            {frpProfiles}
-          />
-        </div>
-
-        <div class="mt-5">
-          <Tabs
-            items={subTabs}
-            value={mcpSubTab}
-            onchange={(v) => {
-              mcpSubTab = v as SubTab;
-            }}
-          />
-        </div>
-
-        {#if mcpSubTab === "config"}
-          <div class="tx-card mt-4 grid gap-6 p-5">
-            <div>
-              <p class="tx-section-label">隧道</p>
-              <TunnelConfigForm
-                workspaceId={workspaceId!}
-                service="mcp"
-                config={mcpTunnelForm}
-                onSave={saveMcpTunnel}
-              />
-            </div>
-            <div>
-              <p class="tx-section-label">认证</p>
-              <AuthConfigForm
-                workspaceId={workspaceId!}
-                auth={profile.auth}
-                onSaveProfile={saveMcpAuth}
-              />
-            </div>
-            <div>
-              <p class="tx-section-label">策略</p>
-              <RuntimePolicyForm
-                toolProfile={profile.runtime.tool_profile}
-                permissionMode={profile.runtime.permission_mode}
-                allowedCommands={profile.runtime.allowed_commands ?? ""}
-                workspaceLocalEntries={profile.runtime.workspace_local_entries ?? true}
-                workspaceScriptExtensions={profile.runtime.workspace_script_extensions ?? ".exe,.bat,.cmd,.ps1"}
-                onSave={saveMcpPolicy}
-              />
-            </div>
-          </div>
-        {:else if mcpSubTab === "logs"}
-          <div class="mt-4">
-            <LogViewer workspaceId={workspaceId!} service="mcp" />
-          </div>
-        {:else}
-          <div class="mt-4">
-            <HealthPanel workspaceId={workspaceId!} />
-          </div>
-        {/if}
+        <LogViewer workspaceId={workspaceId!} service="mcp" />
       {:else}
-        <div class="mt-4 flex flex-col gap-3">
-          <ServicePanel
-            title="Actions"
-            subtitle="OpenAPI 网关 · ChatGPT Actions"
-            status={actionsStatus}
-            statusMessage={actionsStatusMessage}
-            port={actions.local_port}
-            portEditable={true}
-            busy={actionsBusy}
-            tunnelType={actions.tunnel_type}
-            localEndpoint={actionsLocal || actionsLocalEndpoint(actions.local_port)}
-            publicEndpoint={actionsPublic || actionsOpenApiUrl(profile, frpProfiles)}
-            publicLabel="OpenAPI"
-            onToggle={toggleActions}
-            onPortChange={saveActionsPort}
-          />
-          <GptQuickCopy
-            workspaceId={workspaceId!}
-            service="actions"
-            {profile}
-            {frpProfiles}
-          />
-        </div>
-
-        <div class="mt-5">
-          <Tabs
-            items={subTabs}
-            value={actionsSubTab}
-            onchange={(v) => {
-              actionsSubTab = v as SubTab;
-            }}
-          />
-        </div>
-
-        {#if actionsSubTab === "config"}
-          <div class="tx-card mt-4 grid gap-6 p-5">
-            <div>
-              <p class="tx-section-label">隧道</p>
-              <TunnelConfigForm
-                workspaceId={workspaceId!}
-                service="actions"
-                config={actionsTunnelForm}
-                onSave={saveActionsTunnel}
-              />
-            </div>
-            <div>
-              <p class="tx-section-label">认证</p>
-              <ActionsAuthForm
-                workspaceId={workspaceId!}
-                authType={actions.auth_type}
-                oauthClientId={actions.oauth_client_id ?? ""}
-                oauthScopes={actions.oauth_scopes ?? ""}
-                openapiUrl={actionsOpenApiUrl(profile, frpProfiles)}
-                privacyUrl={actionsPrivacyUrl(profile, frpProfiles)}
-                oauthAuthorizeUrl={actionsOAuthAuthorizeUrl(profile, frpProfiles)}
-                oauthTokenUrl={actionsOAuthTokenUrl(profile, frpProfiles)}
-                useSharedSecrets={actions.use_shared_secrets ?? false}
-                onSave={saveActionsAuth}
-              />
-            </div>
-            <div>
-              <p class="tx-section-label">策略</p>
-              <ActionsPolicyForm
-                allowedCommands={actions.allowed_commands ?? ""}
-                maxPatchBytes={actions.max_patch_bytes ?? 200_000}
-                permissionMode={actions.permission_mode}
-                onSave={saveActionsPolicy}
-              />
-            </div>
-          </div>
-        {:else if actionsSubTab === "logs"}
-          <div class="mt-4">
-            <LogViewer workspaceId={workspaceId!} service="actions" />
-          </div>
-        {:else}
-          <div class="mt-4">
-            <HealthPanel workspaceId={workspaceId!} />
-          </div>
-        {/if}
+        <LogViewer workspaceId={workspaceId!} service="actions" />
       {/if}
     </div>
 
-    <footer class="border-t border-[var(--color-border)] px-8 py-4 text-xs text-[var(--color-text-muted)]">
-      MCP 默认端口 28766，Actions 默认 8787，可同时运行。
-    </footer>
+    <!-- 弹窗 1：GPT 连接向导（初次配完后不再占屏幕） -->
+    {#if showGptModal}
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+        <div class="w-full max-w-2xl rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div class="flex items-center justify-between border-b border-[var(--color-border)] pb-3">
+            <div>
+              <h3 class="text-base font-bold">连接到 ChatGPT / Agent 向导</h3>
+              <p class="text-xs text-[var(--color-text-muted)] mt-0.5">复制公网地址与认证凭据，在 GPT 平台或 Custom GPT 中填入。</p>
+            </div>
+            <button
+              type="button"
+              class="rounded-lg p-1 text-gray-400 hover:text-black dark:hover:text-white"
+              onclick={() => (showGptModal = false)}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div class="mt-4">
+            <GptQuickCopy
+              workspaceId={workspaceId!}
+              service={activeService}
+              {profile}
+              publicMcpEndpoint={mcpPublic}
+              {frpProfiles}
+            />
+          </div>
+
+          <div class="mt-6 flex justify-end border-t border-[var(--color-border)] pt-3">
+            <button
+              type="button"
+              class="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-xs font-semibold text-white shadow-sm"
+              onclick={() => (showGptModal = false)}
+            >
+              完成并关闭
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <!-- 弹窗 2：高级设置（隧道、认证、本地目录、策略） -->
+    {#if showSettingsModal}
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+        <div class="w-full max-w-3xl rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div class="flex items-center justify-between border-b border-[var(--color-border)] pb-3">
+            <div>
+              <h3 class="text-base font-bold">工作区与隧道高级配置</h3>
+              <p class="text-xs text-[var(--color-text-muted)] mt-0.5">修改本地端口、FRP/Cloudflare 隧道参数、认证模式及代码执行策略。</p>
+            </div>
+            <button
+              type="button"
+              class="rounded-lg p-1 text-gray-400 hover:text-black dark:hover:text-white"
+              onclick={() => (showSettingsModal = false)}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div class="mt-4 grid gap-6">
+            <!-- 绑定目录 -->
+            <div class="rounded-xl border border-[var(--color-border)] p-4 bg-black/[0.02] dark:bg-white/[0.02]">
+              <p class="text-xs font-semibold text-[var(--color-text-muted)] mb-2">本地工作目录绑定</p>
+              <WorkspaceMetaForm
+                name={profile.name}
+                path={profile.path}
+                onSave={saveWorkspaceName}
+                onUpdatePath={saveWorkspacePath}
+              />
+            </div>
+
+            {#if activeService === "mcp"}
+              <div class="rounded-xl border border-[var(--color-border)] p-4">
+                <p class="text-xs font-semibold text-[var(--color-text-muted)] mb-3">MCP 隧道配置</p>
+                <TunnelConfigForm
+                  workspaceId={workspaceId!}
+                  service="mcp"
+                  config={mcpTunnelForm}
+                  onSave={saveMcpTunnel}
+                />
+              </div>
+
+              <div class="rounded-xl border border-[var(--color-border)] p-4">
+                <p class="text-xs font-semibold text-[var(--color-text-muted)] mb-3">认证方式</p>
+                <AuthConfigForm
+                  workspaceId={workspaceId!}
+                  auth={profile.auth}
+                  onSaveProfile={saveMcpAuth}
+                />
+              </div>
+
+              <div class="rounded-xl border border-[var(--color-border)] p-4">
+                <p class="text-xs font-semibold text-[var(--color-text-muted)] mb-3">策略与权限</p>
+                <RuntimePolicyForm
+                  toolProfile={profile.runtime.tool_profile}
+                  permissionMode={profile.runtime.permission_mode}
+                  allowedCommands={profile.runtime.allowed_commands ?? ""}
+                  workspaceLocalEntries={profile.runtime.workspace_local_entries ?? true}
+                  workspaceScriptExtensions={profile.runtime.workspace_script_extensions ?? ".exe,.bat,.cmd,.ps1"}
+                  onSave={saveMcpPolicy}
+                />
+              </div>
+            {:else}
+              <div class="rounded-xl border border-[var(--color-border)] p-4">
+                <p class="text-xs font-semibold text-[var(--color-text-muted)] mb-3">Actions 隧道配置</p>
+                <TunnelConfigForm
+                  workspaceId={workspaceId!}
+                  service="actions"
+                  config={actionsTunnelForm}
+                  onSave={saveActionsTunnel}
+                />
+              </div>
+
+              <div class="rounded-xl border border-[var(--color-border)] p-4">
+                <p class="text-xs font-semibold text-[var(--color-text-muted)] mb-3">Actions 认证</p>
+                <ActionsAuthForm
+                  workspaceId={workspaceId!}
+                  authType={actions.auth_type}
+                  oauthClientId={actions.oauth_client_id ?? ""}
+                  oauthScopes={actions.oauth_scopes ?? ""}
+                  openapiUrl={actionsOpenApiUrl(profile, frpProfiles)}
+                  privacyUrl={actionsPrivacyUrl(profile, frpProfiles)}
+                  oauthAuthorizeUrl={actionsOAuthAuthorizeUrl(profile, frpProfiles)}
+                  oauthTokenUrl={actionsOAuthTokenUrl(profile, frpProfiles)}
+                  useSharedSecrets={actions.use_shared_secrets ?? false}
+                  onSave={saveActionsAuth}
+                />
+              </div>
+
+              <div class="rounded-xl border border-[var(--color-border)] p-4">
+                <p class="text-xs font-semibold text-[var(--color-text-muted)] mb-3">Actions 策略</p>
+                <ActionsPolicyForm
+                  allowedCommands={actions.allowed_commands ?? ""}
+                  maxPatchBytes={actions.max_patch_bytes ?? 200_000}
+                  permissionMode={actions.permission_mode}
+                  onSave={saveActionsPolicy}
+                />
+              </div>
+            {/if}
+
+            <!-- 危险区：删除工作区 -->
+            <div class="flex items-center justify-between border-t border-red-500/20 pt-4 mt-2">
+              <div>
+                <p class="text-xs font-semibold text-red-500">删除此工作区</p>
+                <p class="text-[11px] text-[var(--color-text-muted)]">移除该工作区的端口、隧道配置与运行状态（不影响本地源码文件）。</p>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg border border-red-500/30 px-3 py-1.5 text-xs font-medium text-red-500 hover:bg-red-500/10 transition-colors"
+                onclick={() => void removeWorkspace()}
+              >
+                删除工作区
+              </button>
+            </div>
+          </div>
+
+          <div class="mt-6 flex justify-end border-t border-[var(--color-border)] pt-3">
+            <button
+              type="button"
+              class="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-xs font-semibold text-white shadow-sm"
+              onclick={() => (showSettingsModal = false)}
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
   </section>
 {/if}
