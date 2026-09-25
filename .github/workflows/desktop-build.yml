@@ -99,3 +99,59 @@ jobs:
             src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    needs:
+      - windows
+      - macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: MCP-Gateway-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('package.json', encoding='utf-8'))['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p release-files
+          find release-assets -type f \( -name '*.exe' -o -name '*.dmg' \) -exec cp {} release-files/ \;
+          echo "Release files:"
+          ls -lah release-files
+
+          if ! find release-files -maxdepth 1 -type f | grep -q .; then
+            echo "No release installers were found."
+            exit 1
+          fi
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; replacing installer assets."
+          else
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "MCP-Gateway $RELEASE_TAG" \
+              --generate-notes
+          fi
+
+          gh release upload "$RELEASE_TAG" release-files/* --clobber
