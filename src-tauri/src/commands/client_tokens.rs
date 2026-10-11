@@ -126,5 +126,5 @@ pub fn revoke_client_token(
     workspace_id: String,
     token_id: String,
 ) -> AppResult<()> {
-    state.with_data(|store| store.revoke_client_token(&workspace_id, &token_id, now_seconds()))
+    state.with_data(|store| store.revoke_client_token(&workspace_id, &token_id))
 }

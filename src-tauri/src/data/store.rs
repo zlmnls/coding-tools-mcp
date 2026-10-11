@@ -28,6 +28,40 @@ pub struct DataStore {
     data: AppData,
 }
 
+/// A revoked token must not remain in the credential store: it cannot be reauthorized.
+fn remove_client_token(
+    by_workspace: &mut std::collections::HashMap<String, Vec<ClientToken>>,
+    workspace_id: &str,
+    token_id: &str,
+) -> bool {
+    let Some(tokens) = by_workspace.get_mut(workspace_id) else {
+        return false;
+    };
+    let original_count = tokens.len();
+    tokens.retain(|token| token.id != token_id);
+    let removed = tokens.len() != original_count;
+    if tokens.is_empty() {
+        by_workspace.remove(workspace_id);
+    }
+    removed
+}
+
+/// Migrate older persisted data that retained revoked clients.
+fn purge_revoked_client_tokens(
+    by_workspace: &mut std::collections::HashMap<String, Vec<ClientToken>>,
+) -> bool {
+    let mut changed = false;
+    by_workspace.retain(|_, tokens| {
+        let before = tokens.len();
+        tokens.retain(|token| token.revoked_at.is_none());
+        if tokens.len() != before || tokens.is_empty() {
+            changed = true;
+        }
+        !tokens.is_empty()
+    });
+    changed
+}
+
 impl DataStore {
     pub fn load() -> AppResult<Self> {
         let _guard = lock_data_file()?;
@@ -35,8 +69,11 @@ impl DataStore {
         let existed_before = path.exists();
         let mut data = load_or_migrate()?;
         let imported = import_legacy_profiles_if_empty(&mut data)?;
+        // Tokens revoked by older releases were kept as historical rows.
+        // There is no reauthorization flow, so remove these obsolete rows on upgrade.
+        let had_revoked_tokens = purge_revoked_client_tokens(&mut data.client_tokens);
         let store = Self { data };
-        if !existed_before || imported > 0 {
+        if !existed_before || imported > 0 || had_revoked_tokens {
             store.persist_unlocked()?;
         }
         if !existed_before {
@@ -49,7 +86,13 @@ impl DataStore {
         self.data
             .client_tokens
             .get(workspace_id)
-            .cloned()
+            .map(|tokens| {
+                tokens
+                    .iter()
+                    .filter(|token| token.revoked_at.is_none())
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -76,21 +119,10 @@ impl DataStore {
         self.save()
     }
 
-    pub fn revoke_client_token(
-        &mut self,
-        workspace_id: &str,
-        token_id: &str,
-        now: u64,
-    ) -> AppResult<()> {
-        let Some(item) = self
-            .data
-            .client_tokens
-            .get_mut(workspace_id)
-            .and_then(|tokens| tokens.iter_mut().find(|item| item.id == token_id))
-        else {
+    pub fn revoke_client_token(&mut self, workspace_id: &str, token_id: &str) -> AppResult<()> {
+        if !remove_client_token(&mut self.data.client_tokens, workspace_id, token_id) {
             return Err(AppError::Message("Token 不存在".into()));
-        };
-        item.revoked_at = Some(now);
+        }
         self.save()
     }
 
@@ -304,6 +336,71 @@ fn shared_value_for_key(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_client_token(id: &str, revoked_at: Option<u64>) -> ClientToken {
+        ClientToken {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            hash: format!("hash-{id}"),
+            scope: "read_only".to_owned(),
+            allowed_tools: vec![],
+            created_at: 1,
+            expires_at: None,
+            revoked_at,
+        }
+    }
+
+    #[test]
+    fn revoking_deletes_only_the_selected_client_and_empty_workspace_bucket() {
+        let mut buckets = std::collections::HashMap::from([
+            (
+                "workspace-a".to_owned(),
+                vec![
+                    test_client_token("alice", None),
+                    test_client_token("bob", None),
+                ],
+            ),
+            (
+                "workspace-b".to_owned(),
+                vec![test_client_token("other", None)],
+            ),
+        ]);
+
+        assert!(!remove_client_token(&mut buckets, "workspace-a", "missing"));
+        assert!(remove_client_token(&mut buckets, "workspace-a", "alice"));
+        assert_eq!(buckets["workspace-a"].len(), 1);
+        assert_eq!(buckets["workspace-a"][0].id, "bob");
+        assert_eq!(buckets["workspace-b"].len(), 1);
+
+        assert!(remove_client_token(&mut buckets, "workspace-a", "bob"));
+        assert!(!buckets.contains_key("workspace-a"));
+        assert!(!remove_client_token(&mut buckets, "workspace-a", "bob"));
+    }
+
+    #[test]
+    fn old_revoked_rows_are_purged_and_hidden_on_upgrade() {
+        let mut store = DataStore {
+            data: AppData::default(),
+        };
+        store.data.client_tokens.insert(
+            "workspace-a".to_owned(),
+            vec![
+                test_client_token("active", None),
+                test_client_token("old-revoked", Some(100)),
+            ],
+        );
+        store.data.client_tokens.insert(
+            "workspace-b".to_owned(),
+            vec![test_client_token("revoked-only", Some(100))],
+        );
+
+        assert_eq!(store.list_client_tokens("workspace-a").len(), 1);
+        assert!(store.list_client_tokens("workspace-b").is_empty());
+        assert!(purge_revoked_client_tokens(&mut store.data.client_tokens));
+        assert_eq!(store.data.client_tokens["workspace-a"].len(), 1);
+        assert!(!store.data.client_tokens.contains_key("workspace-b"));
+        assert!(!purge_revoked_client_tokens(&mut store.data.client_tokens));
+    }
 
     #[test]
     fn workspace_secret_roundtrip() {
