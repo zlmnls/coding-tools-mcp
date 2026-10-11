@@ -5,7 +5,7 @@ use crate::workspace::AuthConfig;
 
 impl AuthConfig {
     pub fn oauth_enabled(&self) -> bool {
-        self.auth_type == "oauth"
+        self.auth_type == "oauth" || self.auth_type == "oauth_and_token"
     }
 
     pub fn bearer_enabled(&self) -> bool {
@@ -163,6 +163,8 @@ mod tests {
     #[test]
     fn oauth_enabled_only_for_oauth_type() {
         let mut auth = AuthConfig::default();
+        assert!(auth.oauth_enabled());
+        auth.auth_type = "oauth_and_token".into();
         assert!(auth.oauth_enabled());
         auth.auth_type = "bearer".into();
         assert!(!auth.oauth_enabled());

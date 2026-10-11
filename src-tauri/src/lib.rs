@@ -22,19 +22,20 @@ mod workspace;
 
 use app_state::AppState;
 use commands::{
-    cancel_skill_install_session, check_app_update, create_skill_install_session, create_workspace,
-    delete_external_mcp, delete_frp_profile, delete_workspace, detect_installed_skills,
-    discover_external_mcps, discover_skills, get_actions_runtime_status, get_app_settings,
-    get_download_config, get_frp_snippet, get_last_workspace_id, get_proxy, get_runtime_status,
-    get_shared_secret, get_webview_memory_sample, get_workspace_secret, hide_to_tray,
-    install_skill_dependencies, install_software, list_external_mcps, list_frp_profiles,
+    cancel_skill_install_session, check_app_update, create_client_token,
+    create_skill_install_session, create_workspace, delete_external_mcp, delete_frp_profile,
+    delete_workspace, detect_installed_skills, discover_external_mcps, discover_skills,
+    get_actions_runtime_status, get_app_settings, get_download_config, get_frp_snippet,
+    get_last_workspace_id, get_proxy, get_runtime_status, get_shared_secret,
+    get_webview_memory_sample, get_workspace_secret, hide_to_tray, install_skill_dependencies,
+    install_software, list_client_tokens, list_external_mcps, list_frp_profiles,
     list_skill_source_roots, list_skills, list_software, list_workspaces, load_skill, open_url,
     open_workspace_directory, quit_app, read_workspace_logs, recreate_ui_webview,
     regenerate_shared_secret, regenerate_workspace_secret, register_detected_skill,
     register_discovered_skill, register_discovered_skills_batch, register_skill,
-    restart_actions_runtime, restart_runtime, restart_tunnel, run_health_checks,
-    run_skill_install_terminal, run_skill_terminal, save_external_mcp, save_frp_profile,
-    set_download_config, set_external_mcp_enabled, set_last_workspace, set_proxy,
+    restart_actions_runtime, restart_runtime, restart_tunnel, revoke_client_token,
+    run_health_checks, run_skill_install_terminal, run_skill_terminal, save_external_mcp,
+    save_frp_profile, set_download_config, set_external_mcp_enabled, set_last_workspace, set_proxy,
     set_shared_secret, set_skill_execution, set_workspace_secret, show_main_window,
     skill_install_plan, start_actions_runtime, start_runtime, start_tunnel, stop_actions_runtime,
     stop_runtime, stop_tunnel, test_external_mcp, test_tunnel, uninstall_software,
@@ -178,6 +179,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            create_client_token,
+            list_client_tokens,
+            revoke_client_token,
             list_workspaces,
             create_workspace,
             update_workspace,

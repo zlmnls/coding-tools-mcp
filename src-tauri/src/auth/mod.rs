@@ -2,6 +2,7 @@ mod bearer;
 mod oauth;
 mod oauth_flow;
 
+pub(crate) use bearer::constant_time_eq_str;
 pub use bearer::verify_bearer_header;
 pub use oauth::{authorization_server_metadata, external_base_url, protected_resource_metadata};
 pub use oauth_flow::{

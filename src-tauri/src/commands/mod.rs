@@ -1,4 +1,5 @@
 mod app_info;
+mod client_tokens;
 pub mod external_mcp;
 mod frp_profiles;
 mod health;
@@ -13,6 +14,7 @@ pub(crate) mod window_chrome;
 mod workspace;
 
 pub use app_info::{check_app_update, open_url};
+pub use client_tokens::{create_client_token, list_client_tokens, revoke_client_token};
 pub use external_mcp::{
     delete_external_mcp, discover_external_mcps, list_external_mcps, save_external_mcp,
     set_external_mcp_enabled, test_external_mcp,

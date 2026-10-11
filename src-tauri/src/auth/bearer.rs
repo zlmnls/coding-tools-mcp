@@ -2,6 +2,10 @@ use axum::http::{header::AUTHORIZATION, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 pub fn verify_bearer_header(headers: &HeaderMap, expected: &str) -> Option<Response> {
+    if expected.is_empty() {
+        return Some((StatusCode::UNAUTHORIZED, "Bearer token is not configured").into_response());
+    }
+
     let Some(header_value) = headers.get(AUTHORIZATION) else {
         return Some((StatusCode::UNAUTHORIZED, "Missing Authorization header").into_response());
     };
@@ -38,6 +42,13 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_configured_token_fails_closed() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, "Bearer ".parse().unwrap());
+        assert!(verify_bearer_header(&headers, "").is_some());
+    }
 
     #[test]
     fn accepts_valid_bearer_token() {

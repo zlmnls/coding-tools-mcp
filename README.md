@@ -229,6 +229,41 @@ MCP 和 Actions 可以为同一个工作区同时运行，也可以分别使用�
 
 ## Agent 可以做什么
 
+### OAuth 与独立客户端 Token 并行接入
+
+在工作区的「认证方式」选择 **OAuth + 独立客户端 Token** 并保存。原 ChatGPT OAuth
+客户端继续使用原来的 `https://your-host/mcp` 地址和 OAuth 授权；其他支持
+Streamable HTTP MCP 的客户端可以在同一地址添加 `Authorization` 请求头：
+
+```http
+Authorization: Bearer mcpg_你的独立客户端Token
+```
+
+在认证表单中为每个客户端单独创建 Token（名称、有效期、只读/全部工具、可选工具白名单）。
+原始 Token **只在创建时展示一次**，请安全存储；「撤销」实时生效，不需要更换其他客户端的
+Token 或重启网关。工具权限不仅影响 `tools/list`，也会在 `tools/call` 时强制验证。
+
+**示例：支持远程 MCP 与自定义请求头的客户端配置**（各客户端具体配置格式可能不同）：
+
+```json
+{
+  "mcpServers": {
+    "local-gateway": {
+      "url": "https://your-host/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_GATEWAY_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+以上 `${MCP_GATEWAY_TOKEN}` 仅用于演示通过客户端支持的环境变量功能提供密钥；
+是否支持环境变量替换取决于客户端。不要把真实 Token 提交到 Git 或复制进公开文档。
+Token 允许访问的操作还受该工作区自身的工具 profile、命令策略及宿主机权限约束。
+只读 Token 无法调用 `exec_command`、`apply_patch`、`skill_exec` 或 `mcp_call` 等可修改状态的工具。
+已有的单一 `Bearer Token` 模式仍保留供旧配置使用，不具备独立客户端权限管理能力。
+
 默认 `core` profile 提供一组稳定、可组合的开发工具：
 
 | 类别 | 主要工具 |

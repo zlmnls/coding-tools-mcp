@@ -7,6 +7,7 @@ use crate::workspace::WorkspaceProfile;
 
 use super::migrate::{data_file_path, load_or_migrate, maybe_backup_legacy_files, save};
 use super::model::AppData;
+use super::model::ClientToken;
 
 static DATA_FILE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -42,6 +43,55 @@ impl DataStore {
             maybe_backup_legacy_files(&path)?;
         }
         Ok(store)
+    }
+
+    pub fn list_client_tokens(&self, workspace_id: &str) -> Vec<ClientToken> {
+        self.data
+            .client_tokens
+            .get(workspace_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn insert_client_token(&mut self, workspace_id: &str, token: ClientToken) -> AppResult<()> {
+        if self.get(workspace_id).is_none() {
+            return Err(AppError::Message("workspace not found".into()));
+        }
+        let items = self
+            .data
+            .client_tokens
+            .entry(workspace_id.to_owned())
+            .or_default();
+        if items
+            .iter()
+            .filter(|item| item.revoked_at.is_none())
+            .count()
+            >= 32
+        {
+            return Err(AppError::Message(
+                "当前工作区最多允许 32 个有效 Token".into(),
+            ));
+        }
+        items.push(token);
+        self.save()
+    }
+
+    pub fn revoke_client_token(
+        &mut self,
+        workspace_id: &str,
+        token_id: &str,
+        now: u64,
+    ) -> AppResult<()> {
+        let Some(item) = self
+            .data
+            .client_tokens
+            .get_mut(workspace_id)
+            .and_then(|tokens| tokens.iter_mut().find(|item| item.id == token_id))
+        else {
+            return Err(AppError::Message("Token 不存在".into()));
+        };
+        item.revoked_at = Some(now);
+        self.save()
     }
 
     pub fn read_file<R>(f: impl FnOnce(&AppData) -> AppResult<R>) -> AppResult<R> {
@@ -115,6 +165,7 @@ impl DataStore {
         };
         let removed = self.data.profiles.remove(index);
         self.data.workspace_secrets.remove(id);
+        self.data.client_tokens.remove(id);
         self.save()?;
         Ok(Some(removed))
     }

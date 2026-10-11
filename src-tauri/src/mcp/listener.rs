@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Form, Query, State};
-use axum::http::{header::CACHE_CONTROL, HeaderMap, StatusCode};
+use axum::http::{header::AUTHORIZATION, header::CACHE_CONTROL, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -12,13 +12,15 @@ use tokio::sync::oneshot;
 use tower_http::cors::CorsLayer;
 
 use crate::auth::{
-    authorization_server_metadata, authorize_get, authorize_post, external_base_url,
-    protected_resource_metadata, token_exchange, verify_bearer_header, verify_oauth_bearer_header,
-    AuthorizeForm, AuthorizeParams, OAuthRuntime, TokenForm,
+    authorization_server_metadata, authorize_get, authorize_post, constant_time_eq_str,
+    external_base_url, protected_resource_metadata, token_exchange, verify_bearer_header,
+    verify_oauth_bearer_header, AuthorizeForm, AuthorizeParams, OAuthRuntime, TokenForm,
 };
+use crate::data::{ClientToken, DataStore};
 use crate::mcp::server::{handle_request, new_state, SharedState};
 use crate::secret::SecretStore;
 use crate::tools::policy::PolicySettings;
+use crate::tools::registry;
 use crate::tools::Workspace;
 use crate::tunnel::append_profile_log;
 use crate::workspace::{AuthConfig, RuntimeConfig};
@@ -36,6 +38,17 @@ struct ListenerState {
     bearer_token: Option<String>,
     oauth: Option<Arc<OAuthRuntime>>,
     oauth_client_secret: Option<String>,
+}
+
+fn matching_client_token(items: &[ClientToken], hash: &str, now: u64) -> Option<ClientToken> {
+    items
+        .iter()
+        .find(|token| {
+            token.revoked_at.is_none()
+                && token.expires_at.is_none_or(|exp| now < exp)
+                && constant_time_eq_str(&token.hash, hash)
+        })
+        .cloned()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -186,6 +199,7 @@ fn resolve_oauth_base(state: &ListenerState, headers: &HeaderMap) -> String {
             return oauth.canonical_server_url.clone();
         }
     }
+
     external_base_url(headers, state.bind_port, &state.configured_public_url)
 }
 
@@ -194,9 +208,29 @@ async fn mcp_post(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    if let Some(response) = require_mcp_auth(&state, &headers) {
-        log_rpc_auth(&state, &headers, &body, false, response.status().as_u16());
-        return response;
+    let principal = match authorize_mcp(&state, &headers) {
+        Ok(principal) => principal,
+        Err(response) => {
+            log_rpc_auth(&state, &headers, &body, false, response.status().as_u16());
+            return response;
+        }
+    };
+    if let Some(token) = &principal {
+        let method = body.get("method").and_then(Value::as_str).unwrap_or("");
+        if method == "tools/call" {
+            let name = body
+                .pointer("/params/name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !token_allows_tool(token, name) {
+                log_rpc_auth(&state, &headers, &body, false, 403);
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"jsonrpc":"2.0", "id":body.get("id").cloned().unwrap_or(Value::Null),
+                        "error":{"code":-32003,"message":"Client Token does not permit this tool"}})),
+                ).into_response();
+            }
+        }
     }
     log_rpc_auth(&state, &headers, &body, true, 200);
     let method = body
@@ -224,7 +258,21 @@ async fn mcp_post(
     let profile_id = state.workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || handle_request(&mcp, &body)).await;
     match result {
-        Ok(response) => {
+        Ok(mut response) => {
+            if let Some(token) = &principal {
+                if method == "tools/list" {
+                    if let Some(tools) = response
+                        .pointer_mut("/result/tools")
+                        .and_then(Value::as_array_mut)
+                    {
+                        tools.retain(|tool| {
+                            tool.get("name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|name| token_allows_tool(token, name))
+                        });
+                    }
+                }
+            }
             append_profile_log(
                 &profile_id,
                 "mcp-requests.log",
@@ -293,18 +341,72 @@ async fn mcp_post(
     }
 }
 
-fn require_mcp_auth(state: &ListenerState, headers: &HeaderMap) -> Option<Response> {
-    if state.auth.bearer_enabled() {
+fn token_allows_tool(token: &ClientToken, name: &str) -> bool {
+    if name == "request_permissions" {
+        return false;
+    }
+    if token.scope == "read_only" && !registry::READ_ONLY_TOOLS.contains(&name) {
+        return false;
+    }
+    token.allowed_tools.is_empty() || token.allowed_tools.iter().any(|allowed| allowed == name)
+}
+
+/// None means the request used OAuth, legacy Bearer, or intentionally disabled auth.
+/// A managed ClientToken carries restrictions that must be applied to tools/list and tools/call.
+fn authorize_mcp(
+    state: &ListenerState,
+    headers: &HeaderMap,
+) -> Result<Option<ClientToken>, Response> {
+    if state.auth.auth_type == "bearer" {
         let expected = state.bearer_token.as_deref().unwrap_or("");
-        return verify_bearer_header(headers, expected);
+        return verify_bearer_header(headers, expected).map_or(Ok(None), Err);
     }
     if state.auth.oauth_enabled() {
         if let Some(oauth) = state.oauth.as_ref() {
             let server_url = resolve_oauth_base(state, headers);
-            return verify_oauth_bearer_header(headers, oauth, &server_url);
+            let oauth_result = verify_oauth_bearer_header(headers, oauth, &server_url);
+            if oauth_result.is_none() {
+                return Ok(None);
+            }
+            if state.auth.auth_type != "oauth_and_token" {
+                return Err(oauth_result.expect("checked above"));
+            }
+            let raw = headers
+                .get(AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+                .map(str::trim)
+                .unwrap_or("");
+            if raw.is_empty() {
+                return Err(oauth_result.expect("OAuth challenge"));
+            }
+            let hash = format!("{:x}", Sha256::digest(raw.as_bytes()));
+            let workspace_id = state.workspace_id.clone();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let match_token = DataStore::read_file(|data| {
+                Ok(data
+                    .client_tokens
+                    .get(&workspace_id)
+                    .and_then(|items| matching_client_token(items, &hash, now)))
+            });
+            if let Ok(Some(token)) = match_token {
+                return Ok(Some(token));
+            }
+            return Err(oauth_result.expect("OAuth challenge"));
         }
+        return Err((StatusCode::UNAUTHORIZED, "OAuth runtime not available").into_response());
     }
-    None
+    if state.auth.auth_type == "noauth" {
+        return Ok(None);
+    }
+    Err((
+        StatusCode::UNAUTHORIZED,
+        "Unsupported authentication configuration",
+    )
+        .into_response())
 }
 
 /// 记录每次 tools/call 的鉴权上下文（成功与失败都记），用于对比连续请求的 token 状态。
@@ -329,7 +431,9 @@ fn log_rpc_auth(
         .to_string();
     let session_id = jsonrpc_session_id(body);
     let (bearer_present, token_fp) = bearer_fingerprint(headers);
-    let auth_mode = if state.auth.oauth_enabled() {
+    let auth_mode = if state.auth.auth_type == "oauth_and_token" {
+        "oauth_and_token"
+    } else if state.auth.oauth_enabled() {
         "oauth"
     } else if state.auth.bearer_enabled() {
         "bearer"
@@ -472,10 +576,65 @@ fn oauth_not_configured() -> Response {
 
 #[cfg(test)]
 mod tests {
+    use crate::data::ClientToken;
     use axum::http::header::CACHE_CONTROL;
     use axum::response::IntoResponse;
 
-    use super::{bind_listener, mcp_discovery, mcp_discovery_payload};
+    use super::{
+        bind_listener, matching_client_token, mcp_discovery, mcp_discovery_payload,
+        token_allows_tool,
+    };
+
+    fn token(scope: &str, allowed_tools: &[&str]) -> ClientToken {
+        ClientToken {
+            id: "test-id".into(),
+            name: "test client".into(),
+            hash: "digest".into(),
+            scope: scope.into(),
+            allowed_tools: allowed_tools.iter().map(|item| (*item).into()).collect(),
+            created_at: 1,
+            expires_at: None,
+            revoked_at: None,
+        }
+    }
+
+    #[test]
+    fn read_only_client_cannot_invoke_mutation_or_external_tools() {
+        let token = token("read_only", &[]);
+        assert!(token_allows_tool(&token, "read_file"));
+        assert!(token_allows_tool(&token, "git_diff"));
+        for denied in [
+            "apply_patch",
+            "exec_command",
+            "skill_exec",
+            "mcp_call",
+            "request_permissions",
+        ] {
+            assert!(!token_allows_tool(&token, denied), "should deny {denied}");
+        }
+    }
+
+    #[test]
+    fn token_tool_allowlist_is_an_additional_restriction() {
+        let limited = token("full", &["read_file"]);
+        assert!(token_allows_tool(&limited, "read_file"));
+        assert!(!token_allows_tool(&limited, "exec_command"));
+        assert!(!token_allows_tool(&limited, "request_permissions"));
+        let unrestricted = token("full", &[]);
+        assert!(token_allows_tool(&unrestricted, "exec_command"));
+    }
+
+    #[test]
+    fn client_tokens_expire_and_revoke_immediately() {
+        let mut item = token("full", &[]);
+        assert!(matching_client_token(&[item.clone()], "digest", 10).is_some());
+        assert!(matching_client_token(&[item.clone()], "other", 10).is_none());
+        item.expires_at = Some(10);
+        assert!(matching_client_token(&[item.clone()], "digest", 10).is_none());
+        item.expires_at = None;
+        item.revoked_at = Some(9);
+        assert!(matching_client_token(&[item], "digest", 10).is_none());
+    }
 
     #[test]
     fn bind_listener_reports_port_conflict_synchronously() {

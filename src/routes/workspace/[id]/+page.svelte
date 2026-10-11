@@ -791,6 +791,7 @@
                 <AuthConfigForm
                   workspaceId={workspaceId!}
                   auth={profile.auth}
+                  endpoint={mcpPublic}
                   onSaveProfile={saveMcpAuth}
                 />
               </div>

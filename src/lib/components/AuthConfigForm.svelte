@@ -1,6 +1,7 @@
 <script lang="ts">
   import { message } from "@tauri-apps/plugin-dialog";
   import SecretInput from "$lib/components/SecretInput.svelte";
+  import ClientTokensForm from "$lib/components/ClientTokensForm.svelte";
   import {
     getWorkspaceSecret,
     regenerateWorkspaceSecret,
@@ -19,16 +20,18 @@
   interface Props {
     workspaceId: string;
     auth: AuthConfig;
+    endpoint?: string;
     onSaveProfile: (auth: AuthConfig, options?: SaveAuthOptions) => void | Promise<void>;
   }
 
   const AUTH_OPTIONS = [
     { value: "oauth", label: "OAuth" },
+    { value: "oauth_and_token", label: "OAuth + 独立客户端 Token（推荐）" },
     { value: "bearer", label: "Bearer Token" },
     { value: "noauth", label: "不启用认证" },
   ] as const;
 
-  let { workspaceId, auth, onSaveProfile }: Props = $props();
+  let { workspaceId, auth, endpoint = "", onSaveProfile }: Props = $props();
 
   let draft = $state<AuthConfig>({ type: "oauth", oauth_client_id: "", use_shared_secrets: false });
   let saving = $state(false);
@@ -54,7 +57,7 @@
       secretsDirty,
   );
 
-  const showOAuth = $derived(draft.type === "oauth");
+  const showOAuth = $derived(draft.type === "oauth" || draft.type === "oauth_and_token");
   const showBearer = $derived(draft.type === "bearer");
 
   $effect(() => {
@@ -72,9 +75,9 @@
   async function loadSecrets(id: string, authType: string, useShared: boolean) {
     const seq = ++secretsLoadSeq;
     const sharedClientId =
-      authType === "oauth" && useShared ? await getSharedSecret("oauth_client_id") : null;
+      (authType === "oauth" || authType === "oauth_and_token") && useShared ? await getSharedSecret("oauth_client_id") : null;
     const keys: WorkspaceSecretKey[] = [];
-    if (authType === "oauth") {
+    if (authType === "oauth" || authType === "oauth_and_token") {
       keys.push("oauth_client_secret", "oauth_password");
     } else if (authType === "bearer") {
       keys.push("bearer_token");
@@ -94,7 +97,7 @@
       }),
     );
     if (seq !== secretsLoadSeq) return;
-    if (authType === "oauth" && useShared) {
+    if ((authType === "oauth" || authType === "oauth_and_token") && useShared) {
       draft = { ...draft, oauth_client_id: sharedClientId ?? "" };
       loadedSharedOauthClientId = sharedClientId ?? "";
     } else {
@@ -111,10 +114,10 @@
     try {
       let sharedSecretChanged = false;
       const clientId =
-        draft.type === "oauth" && draft.use_shared_secrets
+        showOAuth && draft.use_shared_secrets
           ? draft.oauth_client_id.trim()
           : "";
-      if (draft.type === "oauth" && draft.use_shared_secrets) {
+      if (showOAuth && draft.use_shared_secrets) {
         if (!clientId) throw new Error("OAuth Client ID 不能为空");
         sharedSecretChanged = clientId !== loadedSharedOauthClientId;
       }
@@ -214,6 +217,9 @@
         regenerating={regenerating === "oauth_password"}
       />
     </div>
+  {/if}
+  {#if draft.type === "oauth_and_token"}
+    <ClientTokensForm {workspaceId} {endpoint} enabled={auth.type === "oauth_and_token"} />
   {/if}
 
   {#if showBearer}

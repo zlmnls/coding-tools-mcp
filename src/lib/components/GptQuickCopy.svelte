@@ -40,7 +40,7 @@
           return value ?? "";
         };
         let next: Record<string, string>;
-        if (auth.type === "oauth") {
+        if (auth.type === "oauth" || auth.type === "oauth_and_token") {
           const clientId = useShared
             ? ((await getSharedSecret("oauth_client_id")) ?? "")
             : auth.oauth_client_id;
@@ -121,7 +121,7 @@
         value={publicMcpEndpoint}
         hint="GPT 连接器里填这个 URL"
       />
-      {#if auth.type === "oauth"}
+      {#if auth.type === "oauth" || auth.type === "oauth_and_token"}
         <CopyFieldRow label="OAuth Client ID" value={secrets.oauth_client_id ?? auth.oauth_client_id} {loading} />
         <CopyFieldRow
           label="OAuth Client Secret"
